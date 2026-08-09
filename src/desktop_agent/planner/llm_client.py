@@ -25,6 +25,7 @@ class OpenAICompatibleClient:
         tools: list[dict[str, Any]] | None = None,
         *,
         tool_choice: str | dict[str, Any] = "auto",
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
         if not self.config.configured:
             raise LlmClientError(
@@ -38,6 +39,8 @@ class OpenAICompatibleClient:
             "messages": messages,
             "temperature": self.config.temperature,
         }
+        if max_tokens is not None:
+            body["max_tokens"] = int(max_tokens)
         if tools:
             body["tools"] = tools
             body["tool_choice"] = tool_choice
@@ -55,7 +58,8 @@ class OpenAICompatibleClient:
             pool=min(30.0, self.config.timeout_s),
         )
         try:
-            with httpx.Client(timeout=timeout) as client:
+            # Avoid system HTTP_PROXY hijacking localhost Ollama.
+            with httpx.Client(timeout=timeout, trust_env=False) as client:
                 resp = client.post(url, headers=headers, json=body)
                 resp.raise_for_status()
                 data = resp.json()
@@ -95,7 +99,7 @@ class OpenAICompatibleClient:
         url = f"{self.config.api_base}/models"
         headers = {"Authorization": f"Bearer {self.config.api_key}"}
         try:
-            with httpx.Client(timeout=min(15.0, self.config.timeout_s)) as client:
+            with httpx.Client(timeout=min(15.0, self.config.timeout_s), trust_env=False) as client:
                 resp = client.get(url, headers=headers)
                 if resp.status_code >= 400:
                     # Some gateways don't expose /models; try a tiny chat.

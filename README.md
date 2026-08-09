@@ -59,7 +59,7 @@ py -m desktop_agent browser-probe
 `configs/agent.yaml`：
 
 - `perception.enable_ocr_fallback: true`（默认开）— 需要可选依赖：`py -m pip install -e ".[vision]"`
-- `perception.enable_vlm_fallback: false`（默认关）— 打开后使用多模态模型；可设 `perception.vlm_model`（如 `llava` / `qwen2.5vl`）
+- `perception.enable_vlm_fallback` — 打开后使用多模态模型；`perception.vlm_model` 建议 `qwen3-vl:2b`（本机 CPU 更快；规划仍用 `llm.model`）
 
 OCR/VLM 命中的 `element_id` 走坐标点击，且默认需要确认（`--yes` 可自动过）。
 

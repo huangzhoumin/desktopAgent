@@ -8,6 +8,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+
+import httpx
 
 from desktop_agent.config import LlmConfig
 from desktop_agent.errors import AgentError
@@ -48,6 +51,7 @@ Rules:
 - Coordinates are relative to the provided screenshot (origin top-left).
 - Prefer the smallest tight box around the clickable control/text.
 - If nothing matches, return {"matches": [], "notes": "..."}.
+- Do not narrate. Final answer must be the JSON object only.
 """
 
 
@@ -70,7 +74,12 @@ class VlmLocator:
         base = self._get_client().probe()
         if not base.get("ok"):
             return {"ok": False, "error": base.get("error"), "model": self.model}
-        return {"ok": True, "model": self.model, "api_base": self.llm.api_base}
+        return {
+            "ok": True,
+            "model": self.model,
+            "api_base": self.llm.api_base,
+            "transport": "ollama_native" if self._is_ollama() else "openai_compatible",
+        }
 
     def locate(
         self,
@@ -88,46 +97,18 @@ class VlmLocator:
         if not self.llm.configured:
             raise VlmError("LLM not configured for VLM")
 
-        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
-        mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
-        messages = [
-            {"role": "system", "content": _LOCATE_PROMPT},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": f"Query: {query}\nReturn up to {top_k} matches."},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime};base64,{b64}"},
-                    },
-                ],
-            },
-        ]
-
-        client = self._get_client()
-        # Temporarily override model if perception.vlm_model is set.
-        original_model = client.config.model
+        user_text = f"{_LOCATE_PROMPT}\n\nQuery: {query}\nReturn up to {top_k} matches."
         try:
-            if self.model:
-                client.config.model = self.model
-            message = client.chat(messages, tools=None, tool_choice="none")
+            if self._is_ollama():
+                content = self._locate_ollama_native(path, user_text)
+            else:
+                content = self._locate_openai_compatible(path, user_text, top_k=top_k)
+        except VlmError:
+            raise
         except Exception as e:
             raise VlmError(str(e)) from e
-        finally:
-            client.config.model = original_model
 
-        content = message.get("content") or ""
-        if isinstance(content, list):
-            # Some providers return multimodal content arrays.
-            parts = []
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    parts.append(str(part.get("text") or ""))
-                elif isinstance(part, str):
-                    parts.append(part)
-            content = "\n".join(parts)
-
-        data = _parse_json_object(str(content))
+        data = _parse_json_object(content)
         ox, oy = origin
         matches: list[VlmMatch] = []
         for item in (data.get("matches") or [])[:top_k]:
@@ -154,6 +135,112 @@ class VlmLocator:
                 )
             )
         return matches
+
+    def _is_ollama(self) -> bool:
+        base = (self.llm.api_base or "").lower()
+        return "11434" in base or "ollama" in base
+
+    def _ollama_root(self) -> str:
+        raw = (self.llm.api_base or "").rstrip("/")
+        if raw.endswith("/v1"):
+            raw = raw[:-3]
+        parsed = urlparse(raw)
+        if not parsed.scheme:
+            return "http://127.0.0.1:11434"
+        return f"{parsed.scheme}://{parsed.netloc}"
+
+    def _locate_ollama_native(self, path: Path, user_text: str) -> str:
+        """Native /api/chat is more reliable for Qwen3-VL than OpenAI /v1."""
+        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        payload = {
+            "model": self.model,
+            "stream": False,
+            "think": False,
+            "options": {
+                "temperature": float(self.llm.temperature),
+                "num_predict": 320,
+            },
+            "messages": [
+                {
+                    "role": "user",
+                    "content": user_text,
+                    "images": [b64],
+                }
+            ],
+        }
+        url = f"{self._ollama_root()}/api/chat"
+        timeout = httpx.Timeout(
+            connect=min(30.0, self.llm.timeout_s),
+            read=max(self.llm.timeout_s, 180.0),
+            write=min(60.0, self.llm.timeout_s),
+            pool=min(30.0, self.llm.timeout_s),
+        )
+        with httpx.Client(timeout=timeout, trust_env=False) as client:
+            resp = client.post(url, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+        message = data.get("message") or {}
+        return _extract_answer_text(message)
+
+    def _locate_openai_compatible(self, path: Path, user_text: str, *, top_k: int) -> str:
+        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_text},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{b64}"},
+                    },
+                ],
+            }
+        ]
+        client = self._get_client()
+        original_model = client.config.model
+        try:
+            if self.model:
+                client.config.model = self.model
+            message = client.chat(
+                messages,
+                tools=None,
+                tool_choice="none",
+                max_tokens=512,
+            )
+        finally:
+            client.config.model = original_model
+        return _extract_answer_text(message)
+
+
+def _extract_answer_text(message: dict[str, Any]) -> str:
+    """Prefer final content; fall back to thinking/reasoning for Qwen3-VL."""
+    parts = [
+        _message_text(message.get("content")),
+        _message_text(message.get("thinking")),
+        _message_text(message.get("reasoning")),
+    ]
+    # Prefer a part that already contains JSON matches.
+    for part in parts:
+        if part and "matches" in part:
+            return part
+    return "\n".join(p for p in parts if p).strip()
+
+
+def _message_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        parts: list[str] = []
+        for part in value:
+            if isinstance(part, dict) and part.get("type") == "text":
+                parts.append(str(part.get("text") or ""))
+            elif isinstance(part, str):
+                parts.append(part)
+        return "\n".join(parts).strip()
+    return str(value).strip()
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:
