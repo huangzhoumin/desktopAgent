@@ -226,15 +226,20 @@ class ActionExecutor:
     def screenshot_foreground(self, path: str) -> ActionResult:
         t0 = time.perf_counter()
         try:
-            from PIL import ImageGrab
+            from desktop_agent.perception.capture import capture_screen
 
-            img = ImageGrab.grab(all_screens=True)
-            img.save(path)
+            # Full virtual desktop (DPI-aware) so dual-monitor traces are complete.
+            cap = capture_screen(path, scope="full")
             return ActionResult(
                 action="screenshot",
                 ok=True,
                 latency_ms=int((time.perf_counter() - t0) * 1000),
-                detail={"path": path},
+                detail={
+                    "path": path,
+                    "origin": list(cap.origin),
+                    "size": [cap.width, cap.height],
+                    **cap.detail,
+                },
             )
         except Exception as e:
             raise ActionRejected(str(e)) from e

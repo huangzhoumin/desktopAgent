@@ -69,8 +69,13 @@ class Orchestrator:
         "If 记事本/Notepad is missing, call launch_app app=notepad (never ask_user). "
         "Prefer excel_* COM for Excel cells; "
         "word_new + word_type_text + word_save for Word; "
-        "browser_navigate / browser_fill / browser_click / browser_snapshot for web forms "
-        "(attach or controlled fallback; prefer css locators like #name); "
+        "For any http(s) URL goal: call browser_navigate FIRST (never launch_app + address bar / "
+        "Google/Bing/新标签页搜索框). Then browser_snapshot → browser_fill / browser_click via DOM "
+        "(prefer locator.index / css / placeholder / role=searchbox|textbox; attach or controlled). "
+        "On-page search boxes often show a hot-search placeholder, not the word 搜索框 — still fill "
+        "the input/textarea (kind=search_candidate). After fill, press_keys Enter or click search. "
+        "Do not use find_elements/ocr_find/vlm_locate when snapshot already lists the input. "
+        "click target may be element_id from find_elements/ocr_find/vlm_locate only for non-DOM UIs; "
         "for Notepad: launch_app notepad then ONLY notepad_type_text + notepad_save_as "
         "(never open 设置/Settings/gear; if stuck there Esc/Back then continue); "
         "dialog_save_as only when a native Save As dialog is already visible; "
@@ -197,7 +202,8 @@ class Orchestrator:
             self._transition(TaskState.POLICY_CHECK)
             element = None
             if call.name == "click":
-                target = (call.arguments or {}).get("target")
+                args = call.arguments or {}
+                target = args.get("target", args.get("element_id"))
                 if isinstance(target, str):
                     element = self.runtime.perception.get_element(target)
             decision = (

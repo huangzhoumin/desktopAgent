@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Protocol
 
 from desktop_agent.adapters.apps import infer_launch_app_from_goal
@@ -16,13 +17,28 @@ class PlannerError(AgentError):
     code = "LLM_INVALID_TOOL"
 
 
+_URL_RE = re.compile(r"https?://[^\s\"'<>，。；、]+", re.IGNORECASE)
+
+
+def _extract_urls(text: str) -> list[str]:
+    found: list[str] = []
+    for match in _URL_RE.findall(text or ""):
+        cleaned = match.rstrip(".,;:)]}")
+        if cleaned and cleaned not in found:
+            found.append(cleaned)
+    return found
+
+
 SYSTEM_PROMPT = """You are a Windows desktop UI agent planner.
 You solve the user's goal by calling tools one step at a time.
 
 Rules:
 1. Call exactly one tool per turn (or ask_user / done). Act by default — do not narrate or seek permission.
 2. Prefer semantic tools: browser_* for pages, excel_* / word_* for Office, UIA find+click/type for generic apps.
-3. Missing app window → call launch_app yourself immediately. Aliases: notepad(=记事本), excel, word, edge, chrome.
+   If the goal contains an http(s) URL, call browser_navigate with that URL first.
+   Do NOT launch_app + type into the address bar / Google / Bing / 新标签页搜索框 to open websites.
+3. Missing app window → call launch_app yourself immediately. Aliases: notepad(=记事本), excel, word, edge, chrome(=google/谷歌浏览器).
+   Browser tasks use Google Chrome by default (browser_* tools); do not prefer Edge unless the goal asks for Edge.
    找不到窗口就自己 launch_app，禁止 ask_user 询问“要不要启动/是否已打开/可否尝试”。
    NEVER ask_user about launching or opening apps — just call launch_app.
 4. After launch_app notepad: call notepad_type_text (then notepad_save_as if saving). Do NOT open Notepad Settings (设置), never click the gear, never press Ctrl+,. Do not focus Excel/Word when the goal is Notepad. For Word prefer word_new then word_type_text then word_save.
@@ -34,6 +50,15 @@ Rules:
 10. element_id values are only valid from the latest observation — re-find if stale.
 11. Seeing a Save As dialog is NOT success. For any save/download goal, call notepad_save_as / dialog_save_as / excel_save (etc.) and then verify_file (or wait_for file_exists/file_contains) before done. Do not call done if the file is missing.
 12. Vision fallback: if find_elements returns nothing useful, call ocr_find (then click element_id). Use vlm_locate only after OCR fails / is unavailable. Prefer UIA/DOM/COM over vision.
+13. Web page search / form fill (Bilibili, Google, etc.): ALWAYS prefer DOM.
+   After browser_navigate, call browser_snapshot. In the snapshot, treat tag=input/textarea
+   (type text/search/empty) as the on-page search/form field — even when name/placeholder is a
+   hot-search keyword (e.g. 洛克王国…) and NOT the literal words 搜索框/search.
+   Prefer elements with kind=search_candidate. Then browser_fill with locator.index / locator.css /
+   locator.placeholder / role=searchbox|textbox — never find_elements/ocr_find/vlm_locate just to
+   find an on-page search box that already appears as an input in the snapshot.
+   After fill, submit via press_keys ["enter"] or browser_click the search button.
+   Only use OCR/VLM for in-page controls when browser_snapshot has no suitable input/textarea.
 """
 
 
@@ -105,6 +130,16 @@ class LlmPlanner:
                 f"\n\nGoal-specific: this task needs app `{app}`. "
                 f"If its window is missing, call launch_app with app={app} yourself — "
                 f"do not ask_user. 找不到就自己 launch_app app={app}。"
+            )
+        urls = _extract_urls(goal)
+        if urls:
+            system += (
+                "\n\nGoal-specific: open URL via browser_navigate first "
+                f"(url={urls[0]}). Do not use launch_app + address/search box. "
+                "Then browser_snapshot; if an input/textarea (esp. kind=search_candidate) exists, "
+                "browser_fill it by index/css/placeholder (placeholder may be a trending keyword, "
+                "not 搜索框) and press_keys Enter or click search. "
+                "Do not call find_elements/ocr_find/vlm_locate for that on-page field."
             )
 
         messages: list[dict[str, Any]] = [

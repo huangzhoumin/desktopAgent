@@ -202,7 +202,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["target"],
             "properties": {
                 "target": {
-                    "description": "element_id string, or {x,y} screen coordinates",
+                    "description": "element_id string, or {x,y} screen coordinates. "
+                    "Also accepts element_id as a top-level alias for target.",
                     "anyOf": [
                         {"type": "string"},
                         {
@@ -214,6 +215,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                             },
                         },
                     ],
+                },
+                "element_id": {
+                    "type": "string",
+                    "description": "Alias for target when clicking a previously observed element_id",
                 },
                 "button": {
                     "type": "string",
@@ -333,7 +338,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     _tool(
         "browser_navigate",
-        "Navigate the attached browser to a URL (Playwright CDP attach).",
+        "Navigate the attached/controlled browser to a URL via Playwright. "
+        "Prefer this over typing into the address bar or Google/Bing search box.",
         {
             "type": "object",
             "required": ["url"],
@@ -349,7 +355,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     _tool(
         "browser_fill",
-        "Fill a form field in the attached browser via DOM locator.",
+        "Fill a form field via DOM. Prefer locator.index / css / placeholder from "
+        "browser_snapshot (search boxes often use a hot-search placeholder, not 搜索框). "
+        "role=searchbox|textbox also works. After fill, press_keys Enter to submit search.",
         {
             "type": "object",
             "required": ["locator", "value"],
@@ -357,8 +365,16 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "locator": {
                     "type": "object",
                     "properties": {
+                        "index": {
+                            "type": "integer",
+                            "description": "Element index from the latest browser_snapshot",
+                        },
                         "css": {"type": "string"},
-                        "role": {"type": "string"},
+                        "placeholder": {"type": "string"},
+                        "role": {
+                            "type": "string",
+                            "description": "Playwright role, e.g. searchbox / textbox / button",
+                        },
                         "name": {"type": "string"},
                         "label": {"type": "string"},
                     },
@@ -369,7 +385,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     _tool(
         "browser_click",
-        "Click an element in the attached browser via DOM locator.",
+        "Click an element in the attached browser via DOM locator "
+        "(index/css/placeholder/role/name from browser_snapshot).",
         {
             "type": "object",
             "required": ["locator"],
@@ -377,7 +394,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "locator": {
                     "type": "object",
                     "properties": {
+                        "index": {
+                            "type": "integer",
+                            "description": "Element index from the latest browser_snapshot",
+                        },
                         "css": {"type": "string"},
+                        "placeholder": {"type": "string"},
                         "role": {"type": "string"},
                         "name": {"type": "string"},
                         "label": {"type": "string"},
@@ -388,7 +410,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     _tool(
         "browser_snapshot",
-        "Snapshot interactive DOM elements from the attached browser page.",
+        "Snapshot interactive DOM elements. Inputs near the top may have "
+        "kind=search_candidate — use those with browser_fill (index/css/placeholder). "
+        "Do not OCR for 搜索框 when an input is already listed.",
         {"type": "object", "properties": {}},
     ),
     _tool(

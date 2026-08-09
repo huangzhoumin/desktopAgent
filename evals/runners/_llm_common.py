@@ -106,7 +106,7 @@ def ensure_llm(cfg: AgentConfig) -> dict | None:
     }
 
 
-# Compact tool allowlists keep local qwen3:8b on-task (full catalog is too tempting).
+# Compact tool allowlists keep the planner on-task (full catalog is too tempting).
 BROWSER_TOOLS = {
     "browser_navigate",
     "browser_fill",

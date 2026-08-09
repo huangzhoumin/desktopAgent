@@ -11,8 +11,12 @@ from rich.panel import Panel
 from rich.table import Table
 
 from desktop_agent import __version__
+from desktop_agent.common.dpi import ensure_dpi_aware
 from desktop_agent.config import load_config
 from desktop_agent.tools.runtime import ToolRuntime
+
+# Dual-monitor / high-DPI: physical pixels must match UIA bounds + screenshots.
+ensure_dpi_aware()
 
 app = typer.Typer(
     name="desktop-agent",
@@ -63,6 +67,22 @@ def doctor(
 
     # Whitelist
     rows.append(("Whitelist", "OK", f"{len(cfg.whitelist)} apps"))
+
+    # DPI / multi-monitor capture
+    try:
+        from desktop_agent.common.dpi import dpi_status
+
+        dpi = dpi_status()
+        rows.append(
+            (
+                "DPI / virtual screen",
+                "OK" if dpi.get("mode") != "unaware" else "WARN",
+                f"mode={dpi.get('mode')} primary={dpi.get('primary')} "
+                f"virtual={dpi.get('virtual_size')} monitors={dpi.get('monitors')}",
+            )
+        )
+    except Exception as e:
+        rows.append(("DPI / virtual screen", "FAIL", str(e)))
 
     # Browser CDP attach / controlled fallback
     status = rt.browser.probe()
@@ -791,9 +811,19 @@ def run(
         confirm_fn=confirm,
         auto_yes=yes,
     )
+    trace_dir = orch.runtime.trace.dir.resolve()
+    # Print early — runs can take minutes; users need the log path before finish.
+    print(f"LOG_DIR={trace_dir}", flush=True)
+    print(f"LOG_FILE={trace_dir / 'events.jsonl'}", flush=True)
+    rprint(f"[bold cyan]logs[/]: {trace_dir}")
+    rprint(f"[dim]events[/]: {trace_dir / 'events.jsonl'}")
+    rprint(f"[dim]replay[/]: python -m desktop_agent replay {trace_dir}")
+
     summary = orch.run(goal)
     _print_json(summary.to_dict())
-    rprint(f"Trace: {orch.runtime.trace.dir}")
+    print(f"LOG_DIR={trace_dir}", flush=True)
+    rprint(f"[bold cyan]logs[/]: {trace_dir}")
+    rprint(f"[dim]replay[/]: python -m desktop_agent replay {trace_dir}")
     raise typer.Exit(code=0 if summary.success else 1)
 
 if __name__ == "__main__":

@@ -1,14 +1,18 @@
 llm:
   provider: openai_compatible
-  # Local Ollama (best among installed for tool-calling agents)
-  model: qwen3:8b
-  api_base: http://127.0.0.1:11434/v1
+  # DeepSeek V4 Flash (OpenAI-compatible)
+  model: deepseek-v4-flash
+  api_base: https://api.deepseek.com
   temperature: 0.1
   max_tool_rounds: 40
   timeout_s: 180
-  # Ollama ignores auth; any non-empty value works. Or set DESKTOP_AGENT_API_KEY.
-  api_key: ollama
-  # Disable Qwen3 thinking (maps to reasoning_effort=none on Ollama /v1)
+  # Retry transient TLS/network errors (SSL UNEXPECTED_EOF, resets, 502/503…).
+  max_retries: 3
+  # If a system/proxy MITM causes SSL EOF, set trust_env: false (or env
+  # DESKTOP_AGENT_HTTP_TRUST_ENV=0) to bypass HTTP(S)_PROXY for LLM calls.
+  trust_env: true
+  # Put the key in local .env as DESKTOP_AGENT_API_KEY (see .env.example).
+  # DeepSeek V4 thinking is on by default; disable for faster tool-calling.
   think: false
 
 runtime:
@@ -20,19 +24,19 @@ runtime:
 perception:
   uia_max_nodes: 400
   enable_ocr_fallback: true
-  enable_vlm_fallback: true
+  # deepseek-v4-flash is text-only; keep VLM off unless you point vlm_model at a multimodal API.
+  enable_vlm_fallback: false
   min_confidence_to_act: 0.75
   ocr_engine: auto  # auto | rapidocr | windows
-  # Multimodal model for vlm_locate (keep llm.model for tool-calling)
-  vlm_model: qwen3-vl:2b
+  vlm_model: ""
 
 browser:
   mode: attach  # attach (mode B) | controlled (mode A)
   cdp_host: 127.0.0.1
   cdp_port: 9222
   fallback_to_controlled: true  # attach 失败时自动降级到受控浏览器
-  controlled_channel: msedge  # msedge | chrome
-  controlled_user_data_dir: data/browser-controlled
+  controlled_channel: chrome  # chrome | msedge  (default: Google Chrome)
+  controlled_user_data_dir: data/browser-controlled/chrome
 
 safety:
   confirm_coordinate_clicks: true

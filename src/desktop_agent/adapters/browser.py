@@ -140,6 +140,7 @@ class BrowserAdapter:
             f"--user-data-dir={profile}",
             "--no-first-run",
             "--no-default-browser-check",
+            "--start-maximized",
             "--new-window",
             "about:blank",
         ]
@@ -232,10 +233,10 @@ class BrowserAdapter:
         except ImportError as e:
             raise AdapterUnavailable("playwright not installed") from e
 
-        channel = (self.config.browser.controlled_channel or "msedge").lower()
+        channel = (self.config.browser.controlled_channel or "chrome").lower()
         if channel in {"edge", "msedge"}:
             channel = "msedge"
-        elif channel == "chrome":
+        elif channel in {"chrome", "google", "google-chrome", "googlechrome"}:
             channel = "chrome"
 
         user_data = Path(self.config.browser.controlled_user_data_dir)
@@ -251,9 +252,11 @@ class BrowserAdapter:
                 channel=channel,
                 headless=False,
                 accept_downloads=True,
+                no_viewport=True,
                 args=[
                     "--no-first-run",
                     "--no-default-browser-check",
+                    "--start-maximized",
                     f"--remote-debugging-port={self.config.browser.cdp_port}",
                     f"--remote-debugging-address={self.config.browser.cdp_host}",
                 ],
@@ -279,6 +282,11 @@ class BrowserAdapter:
                 version = probed.version or version
                 break
             time.sleep(0.2)
+
+        try:
+            self._focus_os_window()
+        except Exception:
+            pass
 
         return BrowserStatus(
             ok=True,
@@ -320,22 +328,147 @@ class BrowserAdapter:
             pages.append({"index": i, "url": page.url, "title": page.title()})
         return pages
 
-    def navigate(self, url: str, wait_until: str = "domcontentloaded") -> ActionResult:
+    @staticmethod
+    def _normalize_url(url: str) -> str:
+        raw = (url or "").strip()
+        if not raw:
+            raise AdapterUnavailable("browser_navigate requires a non-empty url")
+        lower = raw.lower()
+        if lower.startswith(("http://", "https://", "file://", "about:", "data:")):
+            return raw
+        # Bare domains typed into an agent goal (reject search-like free text).
+        if any(ch.isspace() for ch in raw) or "." not in raw:
+            raise AdapterUnavailable(
+                f"Refusing to open search-like text via browser_navigate: {raw!r}. "
+                "Pass a full http(s) URL."
+            )
+        return "https://" + raw
+
+    def _active_page(self):
         ctx = self._ensure()
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.bring_to_front()
-        page.goto(url, wait_until=wait_until)
+        pages = list(ctx.pages or [])
+        if not pages:
+            return ctx.new_page()
+
+        def _score(page) -> int:
+            try:
+                url = (page.url or "").lower()
+            except Exception:
+                url = ""
+            if url.startswith(("http://", "https://", "file://")):
+                return 5
+            if url in {"", "about:blank"}:
+                return 3
+            if url.startswith(("chrome://", "edge://", "devtools:", "chrome-extension:")):
+                return 0
+            return 2
+
+        best = max(pages, key=_score)
+        if _score(best) == 0:
+            return ctx.new_page()
+        return best
+
+    def _focus_os_window(self, *, title_hint: str = "") -> bool:
+        """Bring the Chromium OS window to the foreground and maximize it."""
+        try:
+            from desktop_agent.common.win32_window import (
+                find_browser_hwnd,
+                force_foreground,
+                maximize_window,
+                move_to_primary_maximized,
+            )
+        except Exception:
+            return False
+        hwnd = find_browser_hwnd(title_substr=title_hint) if title_hint else None
+        if not hwnd:
+            hwnd = find_browser_hwnd()
+        if not hwnd:
+            return False
+        try:
+            # Controlled browser: park on primary + maximize so the tab fills the screen.
+            if self._mode == "controlled":
+                move_to_primary_maximized(hwnd)
+            else:
+                maximize_window(hwnd)
+        except Exception:
+            pass
+        focused = bool(force_foreground(hwnd))
+        try:
+            # force_foreground must not leave a restored small window.
+            maximize_window(hwnd)
+        except Exception:
+            pass
+        return focused
+
+    def navigate(self, url: str, wait_until: str = "domcontentloaded") -> ActionResult:
+        target = self._normalize_url(url)
+        wait = (wait_until or "domcontentloaded").strip().lower()
+        if wait not in {"load", "domcontentloaded", "networkidle", "commit"}:
+            wait = "domcontentloaded"
+
+        ctx = self._ensure()
+        page = self._active_page()
+        try:
+            page.bring_to_front()
+        except Exception:
+            pass
+
+        attempts: list[str] = []
+        for until in (wait, "load", "commit"):
+            if until not in attempts:
+                attempts.append(until)
+
+        last_err: Exception | None = None
+        final_wait = wait
+        for attempt, until in enumerate(attempts):
+            try:
+                page.goto(target, wait_until=until, timeout=60_000)
+                final_wait = until
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                # Create a fresh page once if the current tab is wedged.
+                if attempt == 0:
+                    try:
+                        page = ctx.new_page()
+                        page.bring_to_front()
+                    except Exception:
+                        pass
+                continue
+        if last_err is not None:
+            raise AdapterUnavailable(f"browser_navigate failed for {target}: {last_err}") from last_err
+
+        # Brief settle — SPAs often keep mutating after domcontentloaded.
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=5_000)
+        except Exception:
+            pass
+
+        title = ""
+        current = target
+        try:
+            current = page.url
+            title = page.title()
+        except Exception:
+            pass
+
+        focused = self._focus_os_window(title_hint=title[:40] if title else "")
         return ActionResult(
             action="browser_navigate",
             ok=True,
-            detail={"url": page.url, "title": page.title(), "mode": self._mode},
+            detail={
+                "url": current,
+                "requested_url": target,
+                "title": title,
+                "mode": self._mode,
+                "wait_until": final_wait,
+                "os_focused": focused,
+            },
         )
 
-    def fill(self, locator: dict[str, str], value: str) -> ActionResult:
-        ctx = self._ensure()
-        page = ctx.pages[0] if ctx.pages else None
-        if page is None:
-            raise AdapterUnavailable("No browser page open")
+    def fill(self, locator: dict[str, Any], value: str) -> ActionResult:
+        page = self._active_page()
         loc = self._resolve_locator(page, locator)
         loc.fill(value)
         return ActionResult(
@@ -344,27 +477,21 @@ class BrowserAdapter:
             detail={"locator": locator, "value_len": len(value)},
         )
 
-    def click(self, locator: dict[str, str]) -> ActionResult:
-        ctx = self._ensure()
-        page = ctx.pages[0] if ctx.pages else None
-        if page is None:
-            raise AdapterUnavailable("No browser page open")
+    def click(self, locator: dict[str, Any]) -> ActionResult:
+        page = self._active_page()
         loc = self._resolve_locator(page, locator)
         loc.click()
         return ActionResult(action="browser_click", ok=True, detail={"locator": locator})
 
     def download(
         self,
-        locator: dict[str, str],
+        locator: dict[str, Any],
         path: str,
         *,
         timeout_ms: int = 15000,
     ) -> ActionResult:
         """Click a download trigger and save the file to path (Playwright download API)."""
-        ctx = self._ensure()
-        page = ctx.pages[0] if ctx.pages else None
-        if page is None:
-            raise AdapterUnavailable("No browser page open")
+        page = self._active_page()
         out = Path(path).resolve()
         out.parent.mkdir(parents=True, exist_ok=True)
         if out.exists():
@@ -387,44 +514,119 @@ class BrowserAdapter:
             },
         )
 
-    def snapshot_interactive(self, limit: int = 80) -> list[dict[str, Any]]:
-        ctx = self._ensure()
-        page = ctx.pages[0] if ctx.pages else None
-        if page is None:
-            return []
+    _SNAPSHOT_SELECTOR = (
+        'input, textarea, select, button, a[href], [role="button"], [contenteditable="true"]'
+    )
+
+    def snapshot_interactive(self, limit: int = 80) -> dict[str, Any]:
+        page = self._active_page()
         script = """
         () => {
-          const nodes = Array.from(document.querySelectorAll(
-            'input, textarea, select, button, a[href], [role="button"], [contenteditable="true"]'
-          ));
+          const sel = %s;
+          const nodes = Array.from(document.querySelectorAll(sel));
+          const esc = (s) => {
+            if (window.CSS && CSS.escape) return CSS.escape(s);
+            return String(s).replace(/[^a-zA-Z0-9_-]/g, '\\\\$&');
+          };
           return nodes.slice(0, %d).map((el, i) => {
             const rect = el.getBoundingClientRect();
-            const label = el.getAttribute('aria-label')
-              || el.getAttribute('placeholder')
-              || el.getAttribute('name')
+            const tag = el.tagName.toLowerCase();
+            const type = (el.getAttribute('type') || '').toLowerCase();
+            const placeholder = el.getAttribute('placeholder') || '';
+            const aria = el.getAttribute('aria-label') || '';
+            const attrName = el.getAttribute('name') || '';
+            const label = aria || placeholder || attrName
               || (el.innerText || '').trim().slice(0, 80);
+            const roleAttr = (el.getAttribute('role') || '').toLowerCase();
+            const textTypes = new Set(['text', 'search', '', 'email', 'tel', 'url']);
+            const isTextInput = (tag === 'input' && textTypes.has(type))
+              || tag === 'textarea'
+              || roleAttr === 'searchbox'
+              || el.getAttribute('contenteditable') === 'true';
+            let role = roleAttr;
+            if (!role) {
+              if (type === 'search' || roleAttr === 'searchbox') role = 'searchbox';
+              else if (isTextInput) role = 'textbox';
+              else if (tag === 'button' || roleAttr === 'button') role = 'button';
+              else if (tag === 'a') role = 'link';
+            }
+            const inHeader = rect.y >= 0 && rect.y < 140 && rect.width >= 80 && rect.height >= 14;
+            const kind = (isTextInput && inHeader) ? 'search_candidate' : '';
+            let css = '';
+            if (el.id) css = '#' + esc(el.id);
+            else if (attrName && (tag === 'input' || tag === 'textarea' || tag === 'select'))
+              css = tag + '[name="' + attrName.replace(/"/g, '\\\\"') + '"]';
+            else if (placeholder && isTextInput)
+              css = tag + '[placeholder="' + placeholder.replace(/"/g, '\\\\"') + '"]';
+            else {
+              const cls = String(el.className || '').trim().split(/\\s+/).filter(Boolean)[0];
+              if (cls) css = tag + '.' + esc(cls);
+            }
             return {
               index: i,
-              tag: el.tagName.toLowerCase(),
-              type: el.getAttribute('type') || '',
+              tag: tag,
+              type: type,
+              role: role,
+              kind: kind,
               name: label,
+              placeholder: placeholder,
+              css: css,
               value: el.value || '',
               href: el.getAttribute('href') || '',
               bounds: {x: rect.x, y: rect.y, w: rect.width, h: rect.height}
             };
           });
         }
-        """ % limit
-        return page.evaluate(script)
+        """ % (repr(self._SNAPSHOT_SELECTOR), limit)
+        try:
+            elements = page.evaluate(script)
+        except Exception:
+            elements = []
+        url = ""
+        title = ""
+        try:
+            url = page.url
+            title = page.title()
+        except Exception:
+            pass
+        return {
+            "elements": elements,
+            "url": url,
+            "title": title,
+            "mode": self._mode,
+        }
 
-    @staticmethod
-    def _resolve_locator(page, locator: dict[str, str]):
+    @classmethod
+    def _resolve_locator(cls, page, locator: dict[str, Any]):
+        if locator.get("index") is not None and str(locator.get("index")).strip() != "":
+            idx = int(locator["index"])
+            return page.locator(cls._SNAPSHOT_SELECTOR).nth(idx)
         if locator.get("css"):
-            return page.locator(locator["css"]).first
+            return page.locator(str(locator["css"])).first
+        if locator.get("placeholder"):
+            return page.get_by_placeholder(str(locator["placeholder"])).first
         if locator.get("label"):
-            return page.get_by_label(locator["label"]).first
-        if locator.get("role") and locator.get("name"):
-            return page.get_by_role(locator["role"], name=locator["name"]).first
-        if locator.get("name"):
-            return page.get_by_role("button", name=locator["name"]).first
-        raise AdapterUnavailable(f"Unsupported locator: {locator}")
+            return page.get_by_label(str(locator["label"])).first
+        role = str(locator.get("role") or "").strip()
+        name = str(locator.get("name") or "").strip()
+        if role and name:
+            return page.get_by_role(role, name=name).first
+        if role:
+            return page.get_by_role(role).first
+        if name:
+            # Prefer form fields over buttons: snapshot "name" is often a placeholder.
+            for candidate in ("searchbox", "textbox", "button", "link"):
+                loc = page.get_by_role(candidate, name=name)
+                try:
+                    if loc.count() > 0:
+                        return loc.first
+                except Exception:
+                    continue
+            try:
+                ph = page.get_by_placeholder(name)
+                if ph.count() > 0:
+                    return ph.first
+            except Exception:
+                pass
+            return page.get_by_role("button", name=name).first
+        raise AdapterUnavailable(f"Unsupported locator: locator={locator}")

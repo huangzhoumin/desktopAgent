@@ -1189,7 +1189,7 @@ desktop-agent doctor
 
 1. ~~评审关键决策（浏览器连接 / Office+WPS / CLI）~~ ✅  
 2. ~~冻结 Tool Schema v1 / doctor / UIA+Notepad / Office+WPS / Attach+模式A / LLM Orchestrator~~ ✅  
-3. 用 LLM e2e 稳定 T01–T05（本地 Ollama / 云端）— 入口已接：`eval-llm-t01`…`eval-llm-t05` / `eval-dashboard --llm-suite`  
+3. 用 LLM e2e 稳定 T01–T05（DeepSeek / 云端 OpenAI-compatible）— 入口已接：`eval-llm-t01`…`eval-llm-t05` / `eval-dashboard --llm-suite`  
 4. ~~对话框覆盖更多壳层场景（Office 提示框、浏览器下载栏 UIA）~~ ✅（`eval-t11` / `eval-t12`）  
 5. M4：托盘驻留 / 暂停继续 / App Profile / VLM 兜底  
 

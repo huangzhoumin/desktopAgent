@@ -24,6 +24,8 @@ def test_normalize_app_alias_chinese_notepad():
     assert normalize_app_alias("记事本") == "notepad"
     assert normalize_app_alias("Notepad.exe") == "notepad"
     assert normalize_app_alias("excel") == "excel"
+    assert normalize_app_alias("google") == "chrome"
+    assert normalize_app_alias("谷歌浏览器") == "chrome"
 
 
 @pytest.mark.parametrize(
@@ -57,6 +59,12 @@ def test_infer_launch_app_from_question_uses_goal():
 def test_infer_launch_app_from_goal():
     assert infer_launch_app_from_goal("打开记事本，输入 hello") == "notepad"
     assert infer_launch_app_from_goal("随便聊聊") is None
+    assert (
+        infer_launch_app_from_goal(
+            "google 打开 https://www.bilibili.com，在 B站顶部搜索框 填入凡人修仙传"
+        )
+        == "chrome"
+    )
 
 
 def test_dialog_helper_escape():

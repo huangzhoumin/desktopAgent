@@ -10,6 +10,31 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / "configs" / "agent.yaml"
 DEFAULT_WHITELIST = ROOT / "configs" / "apps.whitelist.yaml"
+DEFAULT_ENV_FILE = ROOT / ".env"
+
+
+def load_dotenv(path: Path | None = None, *, override: bool = False) -> None:
+    """Load KEY=VALUE pairs from a local .env into os.environ (no extra dependency)."""
+    env_path = path or DEFAULT_ENV_FILE
+    if not env_path.exists():
+        return
+    try:
+        text = env_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        if override or key not in os.environ:
+            os.environ[key] = value
 
 
 @dataclass
@@ -18,8 +43,8 @@ class BrowserConfig:
     cdp_host: str = "127.0.0.1"
     cdp_port: int = 9222
     fallback_to_controlled: bool = True
-    controlled_channel: str = "msedge"  # msedge | chrome
-    controlled_user_data_dir: str = "data/browser-controlled"
+    controlled_channel: str = "chrome"  # chrome | msedge
+    controlled_user_data_dir: str = "data/browser-controlled/chrome"
 
 
 @dataclass
@@ -39,7 +64,11 @@ class LlmConfig:
     api_base: str = ""
     api_key: str = ""
     timeout_s: float = 60.0
-    # Ollama/Qwen3: set False to prefer direct tool calls over long chain-of-thought.
+    # Extra attempts after the first try for transient TLS/network flaps.
+    max_retries: int = 3
+    # httpx trust_env: honor HTTP(S)_PROXY. Set false if a broken proxy causes SSL EOF.
+    trust_env: bool = True
+    # DeepSeek V4: set False to disable thinking (faster tool-calling).
     think: bool | None = None
 
     @property
@@ -112,6 +141,7 @@ def load_config(
     config_path: Path | None = None,
     whitelist_path: Path | None = None,
 ) -> AgentConfig:
+    load_dotenv()
     raw = _load_yaml(config_path or DEFAULT_CONFIG)
     perception = raw.get("perception", {})
     runtime_raw = raw.get("runtime", {})
@@ -124,7 +154,8 @@ def load_config(
     if not traces.is_absolute():
         traces = ROOT / traces
 
-    api_key = str(llm_raw.get("api_key") or os.environ.get("DESKTOP_AGENT_API_KEY") or "")
+    # Prefer process/.env over yaml so secrets stay out of agent.yaml.
+    api_key = str(os.environ.get("DESKTOP_AGENT_API_KEY") or llm_raw.get("api_key") or "")
     max_rounds = int(llm_raw.get("max_tool_rounds", 40))
     think_raw = llm_raw.get("think", None)
     think: bool | None
@@ -132,6 +163,11 @@ def load_config(
         think = None
     else:
         think = bool(think_raw)
+    trust_env_raw = os.environ.get("DESKTOP_AGENT_HTTP_TRUST_ENV")
+    if trust_env_raw is None:
+        trust_env = bool(llm_raw.get("trust_env", True))
+    else:
+        trust_env = str(trust_env_raw).strip().lower() not in {"0", "false", "no", "off"}
 
     return AgentConfig(
         raw=raw,
@@ -141,9 +177,9 @@ def load_config(
             cdp_host=str(browser_raw.get("cdp_host", "127.0.0.1")),
             cdp_port=int(browser_raw.get("cdp_port", 9222)),
             fallback_to_controlled=bool(browser_raw.get("fallback_to_controlled", True)),
-            controlled_channel=str(browser_raw.get("controlled_channel", "msedge")),
+            controlled_channel=str(browser_raw.get("controlled_channel", "chrome")),
             controlled_user_data_dir=str(
-                browser_raw.get("controlled_user_data_dir", "data/browser-controlled")
+                browser_raw.get("controlled_user_data_dir", "data/browser-controlled/chrome")
             ),
         ),
         safety=SafetyConfig(
@@ -160,6 +196,8 @@ def load_config(
             api_base=str(llm_raw.get("api_base", "")).rstrip("/"),
             api_key=api_key,
             timeout_s=float(llm_raw.get("timeout_s", 60.0)),
+            max_retries=int(llm_raw.get("max_retries", 3)),
+            trust_env=trust_env,
             think=think,
         ),
         runtime=RuntimeConfig(

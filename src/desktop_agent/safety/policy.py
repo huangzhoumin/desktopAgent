@@ -77,7 +77,7 @@ class SafetyGuard:
         args = call.arguments or {}
 
         if name == "click":
-            target = args.get("target")
+            target = args.get("target", args.get("element_id"))
             if isinstance(target, dict) and "x" in target and "y" in target:
                 if self.config.safety.confirm_coordinate_clicks:
                     return PolicyDecision(

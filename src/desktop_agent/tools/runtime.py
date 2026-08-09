@@ -199,7 +199,10 @@ class ToolRuntime:
             )
         if name == "click":
             self._assert_fg_allowed()
-            target = kwargs["target"]
+            # LLMs often pass element_id instead of target.
+            target = kwargs.get("target", kwargs.get("element_id"))
+            if target is None:
+                raise PermissionDenied("click requires target or element_id")
             return self.action.click(
                 target,
                 button=kwargs.get("button", "left"),
@@ -207,9 +210,10 @@ class ToolRuntime:
             )
         if name == "type_text":
             self._assert_fg_allowed()
+            target = kwargs.get("target", kwargs.get("element_id"))
             return self.action.type_text(
                 text=kwargs["text"],
-                target=kwargs.get("target"),
+                target=target,
                 clear=bool(kwargs.get("clear", True)),
             )
         if name == "press_keys":
@@ -274,11 +278,40 @@ class ToolRuntime:
                 open_if_needed=bool(kwargs.get("open_if_needed", True)),
             )
         if name == "browser_snapshot":
-            return {
+            snap = self.browser.snapshot_interactive()
+            elements = snap.get("elements") if isinstance(snap, dict) else snap
+            url = snap.get("url") if isinstance(snap, dict) else ""
+            title = snap.get("title") if isinstance(snap, dict) else ""
+            payload = {
                 "ok": True,
-                "elements": self.browser.snapshot_interactive(),
-                "mode": self.browser.mode,
+                "elements": elements or [],
+                "url": url or "",
+                "title": title or "",
+                "mode": (snap.get("mode") if isinstance(snap, dict) else None) or self.browser.mode,
             }
+            if not payload["elements"] and (not url or url == "about:blank"):
+                payload["hint"] = (
+                    "DOM is empty (about:blank or no page). "
+                    "Call browser_navigate with the target http(s) URL first — "
+                    "do not use the address bar / Google/Bing search box."
+                )
+            else:
+                candidates = [
+                    e
+                    for e in (elements or [])
+                    if isinstance(e, dict) and e.get("kind") == "search_candidate"
+                ]
+                if candidates:
+                    sample = candidates[0]
+                    payload["hint"] = (
+                        f"Found {len(candidates)} search_candidate input(s). "
+                        "Prefer browser_fill with locator.index / css / placeholder "
+                        "(placeholder may be a trending keyword, not 搜索框); "
+                        "then press_keys Enter. Do not call find_elements/ocr_find/vlm_locate "
+                        f"for this field. example_index={sample.get('index')} "
+                        f"placeholder={sample.get('placeholder')!r} css={sample.get('css')!r}."
+                    )
+            return payload
         if name == "excel_new":
             return self.excel.new()
         if name == "excel_get_range":
