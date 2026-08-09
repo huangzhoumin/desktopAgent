@@ -21,6 +21,10 @@ RUNTIME_TOOLS = frozenset(
         "press_keys",
         "wait_for",
         "dialog_save_as",
+        "dialog_click_button",
+        "notepad_type_text",
+        "notepad_save_as",
+        "verify_file",
         "browser_probe",
         "browser_navigate",
         "browser_fill",
@@ -205,14 +209,61 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                                 "element_exists",
                                 "element_gone",
                                 "window_title_contains",
+                                "file_exists",
+                                "file_contains",
                                 "timeout",
                             ],
                         },
-                        "query": {"type": "object"},
+                        "query": {
+                            "type": "object",
+                            "description": "For file_*: {path}; for file_contains also value/contains text",
+                        },
                         "value": {},
                         "timeout_ms": {"type": "integer", "default": 10000},
                     },
                 }
+            },
+        },
+    ),
+    _tool(
+        "notepad_type_text",
+        "Type into the active Notepad editor (closed-loop UIA). Prefer after launch_app notepad.",
+        {
+            "type": "object",
+            "required": ["text"],
+            "properties": {
+                "text": {"type": "string"},
+                "clear": {"type": "boolean", "default": True},
+            },
+        },
+    ),
+    _tool(
+        "notepad_save_as",
+        "Save the active Notepad document via Save As and require the file to exist on disk.",
+        {
+            "type": "object",
+            "required": ["path"],
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Destination .txt path (absolute preferred)",
+                },
+            },
+        },
+    ),
+    _tool(
+        "verify_file",
+        "Verify a local file exists (and optionally contains text). Use after save/download before done.",
+        {
+            "type": "object",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string"},
+                "contains": {
+                    "type": "string",
+                    "description": "Optional substring that must appear in the file",
+                },
+                "min_bytes": {"type": "integer", "default": 0},
             },
         },
     ),
@@ -304,13 +355,43 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     _tool(
         "dialog_save_as",
-        "Fill a visible native Save As dialog with a path and confirm Save.",
+        "Fill a visible native Save As dialog with a path, confirm Save, and wait until the file exists. Prefer notepad_save_as for Notepad.",
         {
             "type": "object",
             "required": ["path"],
             "properties": {
                 "path": {"type": "string"},
                 "timeout_s": {"type": "number", "default": 5.0},
+                "wait_file_s": {"type": "number", "default": 6.0},
+            },
+        },
+    ),
+    _tool(
+        "dialog_click_button",
+        "Click a button on an Office/shell prompt. For Excel's OneDrive save flyout, "
+        "pass action=save with path=local_file to use More options -> classic Save As.",
+        {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "yes|no|cancel|save|discard or an exact button name",
+                    "default": "yes",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Local destination when saving from a prompt (forces More options / Save As)",
+                },
+                "names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional explicit button names to try",
+                },
+                "title_contains": {
+                    "type": "string",
+                    "description": "Optional dialog title filter (Excel/Word/...)",
+                },
+                "timeout_s": {"type": "number", "default": 3.0},
             },
         },
     ),

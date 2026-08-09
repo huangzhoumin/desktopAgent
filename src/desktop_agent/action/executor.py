@@ -113,41 +113,14 @@ class ActionExecutor:
 
     def press_keys(self, keys: list[str]) -> ActionResult:
         t0 = time.perf_counter()
-        mapped = []
-        for k in keys:
-            kl = k.lower()
-            mapping = {
-                "ctrl": "Ctrl",
-                "control": "Ctrl",
-                "alt": "Alt",
-                "shift": "Shift",
-                "enter": "Enter",
-                "tab": "Tab",
-                "esc": "Esc",
-                "escape": "Esc",
-                "backspace": "Backspace",
-                "delete": "Delete",
-                "win": "Win",
-                "up": "Up",
-                "down": "Down",
-                "left": "Left",
-                "right": "Right",
-            }
-            mapped.append(mapping.get(kl, k))
+        mapped = [self._normalize_key(k) for k in keys]
         if len(mapped) == 1:
-            seq = "{" + mapped[0] + "}" if mapped[0] in {
-                "Enter", "Tab", "Esc", "Backspace", "Delete", "Up", "Down", "Left", "Right"
-            } else mapped[0]
+            seq = self._format_key_token(mapped[0])
         else:
-            # modifier combo like Ctrl+s
-            mods = [m for m in mapped[:-1]]
+            # Modifier combo: {Ctrl}s or {Alt}{F4}
+            mods = mapped[:-1]
             last = mapped[-1]
-            prefix = "".join("{" + m + "}" for m in mods)
-            # uiautomation SendKeys uses {Ctrl}a style
-            seq = "".join("{" + m + "}" for m in mods) + last
-            if last.lower() in {"enter", "tab", "esc"}:
-                seq = "".join("{" + m + "}" for m in mods) + "{" + last + "}"
-            _ = prefix
+            seq = "".join("{" + m + "}" for m in mods) + self._format_key_token(last)
         try:
             auto.SendKeys(seq, waitTime=0.05)
             return ActionResult(
@@ -158,6 +131,60 @@ class ActionExecutor:
             )
         except Exception as e:
             raise ActionRejected(str(e)) from e
+
+    @staticmethod
+    def _normalize_key(key: str) -> str:
+        kl = key.lower()
+        mapping = {
+            "ctrl": "Ctrl",
+            "control": "Ctrl",
+            "alt": "Alt",
+            "shift": "Shift",
+            "enter": "Enter",
+            "tab": "Tab",
+            "esc": "Esc",
+            "escape": "Esc",
+            "backspace": "Backspace",
+            "delete": "Delete",
+            "win": "Win",
+            "up": "Up",
+            "down": "Down",
+            "left": "Left",
+            "right": "Right",
+        }
+        if kl in mapping:
+            return mapping[kl]
+        # Function keys: f4 / F4 -> F4
+        if len(kl) >= 2 and kl[0] == "f" and kl[1:].isdigit():
+            return "F" + kl[1:]
+        return key
+
+    @staticmethod
+    def _format_key_token(token: str) -> str:
+        """Wrap special keys for uiautomation SendKeys; leave plain chars bare."""
+        special = {
+            "Enter",
+            "Tab",
+            "Esc",
+            "Backspace",
+            "Delete",
+            "Up",
+            "Down",
+            "Left",
+            "Right",
+            "Win",
+            "Home",
+            "End",
+            "PageUp",
+            "PageDown",
+            "Insert",
+        }
+        if token in special:
+            return "{" + token + "}"
+        if len(token) >= 2 and token[0] == "F" and token[1:].isdigit():
+            return "{" + token + "}"
+        # Single printable character (e.g. s in Ctrl+s)
+        return token
 
     @staticmethod
     def _escape_sendkeys(text: str) -> str:

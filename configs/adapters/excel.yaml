@@ -4,4 +4,11 @@ prefer_tools:
   - excel_set_range
   - excel_get_range
   - excel_save
+  - dialog_click_button
+  - wait_for
   - press_keys
+notes: >
+  Cells via COM excel_set_range/excel_get_range; omit sheet unless sure of exact name.
+  Prefer excel_new then set_range then excel_save(path). Do not relaunch excel repeatedly.
+  Close/save flyout often defaults to OneDrive: use dialog_click_button action=save
+  with path=<local file> (More options -> classic Save As). Use action=no to discard.

@@ -36,8 +36,10 @@ class Orchestrator:
     adapter_hints: str = (
         "Use launch_app to start missing apps. Prefer excel_* COM for Excel cells; "
         "browser_* for web pages (attach or controlled fallback); "
-        "dialog_save_as for native Save As dialogs; "
-        "UIA get_ui_summary/find_elements/click/type_text for Notepad and generic apps."
+        "for Notepad use notepad_type_text + notepad_save_as (closed-loop; waits for file); "
+        "dialog_save_as only when a native Save As dialog is already visible; "
+        "after any save, call verify_file before done — a visible 另存为 dialog alone is not success; "
+        "UIA get_ui_summary/find_elements/click/type_text for generic apps."
     )
 
     def __post_init__(self) -> None:

@@ -26,12 +26,14 @@ py -m desktop_agent browser-probe
 
 - CLI：`doctor` / `run` / `list-windows` / `sense` / `click` / `type-text` / `press-keys`
 - LLM Orchestrator 状态机 + tool-calling Planner（`launch_app` / `ask_user` / `done`）
-- UIA 感知与基础动作；`wait_for`；通用 `dialog_save_as`
+- UIA 感知与基础动作；`wait_for`（含 `file_exists` / `file_contains`）；通用 `dialog_save_as`
+- 记事本闭环：`notepad_type_text` / `notepad_save_as`；保存后可用 `verify_file` 验落盘
 - 应用白名单、高危确认门闩与本地 Trace
 - 浏览器 CDP Attach（模式 B）+ 失败自动降级受控浏览器（模式 A）
 - Excel / Word COM；WPS 表格/文字读写与保存
 - 无 LLM 闭环评测 + 汇总看板：
   - T01 Notepad：`py -m desktop_agent eval-t01`
+  - LLM T01 Notepad（必须真正写入文件）：`py -m desktop_agent eval-llm-t01`
   - T02 Edge 填表（Attach 或模式 A 降级）：`py -m desktop_agent eval-t02`
   - T03 Chrome：`py -m desktop_agent eval-t03 --force-controlled`
   - T04 Excel：`py -m desktop_agent eval-t04`
@@ -53,4 +55,7 @@ py -m desktop_agent browser-probe
 # 确保 ollama serve 已运行
 py -m desktop_agent doctor
 py -m desktop_agent run "打开记事本，输入 hello，然后告诉我完成了" --yes
+
+# LLM 记事本另存为：以磁盘文件为准（只弹出另存为不算通过）
+py -m desktop_agent eval-llm-t01
 ```
