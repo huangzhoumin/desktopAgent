@@ -30,6 +30,14 @@ DEFAULT_SUITE = {
     "T12": "t12_download_bar.py",
 }
 
+LLM_SUITE = {
+    "LLM_T01": "llm_t01_notepad.py",
+    "LLM_T02": "llm_t02_edge.py",
+    "LLM_T03": "llm_t03_chrome.py",
+    "LLM_T04": "llm_t04_excel.py",
+    "LLM_T05": "llm_t05_word.py",
+}
+
 
 def _run_one(script: Path, extra: list[str]) -> dict:
     t0 = time.perf_counter()
@@ -75,6 +83,27 @@ def _latest_by_task(reports: list[dict]) -> dict[str, dict]:
     return latest
 
 
+def _summarize_report(v: dict) -> dict:
+    steps = v.get("steps") or []
+    if isinstance(steps, list) and steps:
+        step_n = len(steps)
+        step_ok = sum(1 for s in steps if s.get("ok"))
+        total_ms = sum(int(s.get("ms") or 0) for s in steps)
+    else:
+        # LLM e2e reports use llm_steps / elapsed_ms instead of a step list.
+        step_n = int(v.get("llm_steps") or v.get("steps") or 0)
+        step_ok = step_n if v.get("ok") else 0
+        total_ms = int(v.get("elapsed_ms") or v.get("total_ms") or 0)
+    return {
+        "ok": v.get("ok"),
+        "task": v.get("task"),
+        "steps": step_n,
+        "step_ok": step_ok,
+        "total_ms": total_ms,
+        "report": v.get("_report_path"),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Eval dashboard / suite runner")
     parser.add_argument(
@@ -87,6 +116,11 @@ def main() -> int:
         "--suite",
         action="store_true",
         help="Run core suite T01-T08 (skipping unavailable apps as failures).",
+    )
+    parser.add_argument(
+        "--llm-suite",
+        action="store_true",
+        help="Run LLM e2e suite LLM_T01-LLM_T05.",
     )
     parser.add_argument(
         "--out",
@@ -109,20 +143,25 @@ def main() -> int:
 
     cfg = load_config()
     run_ids: list[str] = []
-    if args.suite:
+    suite_map = DEFAULT_SUITE
+    if args.llm_suite:
+        run_ids = ["LLM_T01", "LLM_T02", "LLM_T03", "LLM_T04", "LLM_T05"]
+        suite_map = {**DEFAULT_SUITE, **LLM_SUITE}
+    elif args.suite:
         run_ids = ["T01", "T02", "T03", "T04", "T05", "T06", "T07", "T08"]
     elif args.run is not None:
         run_ids = [x.upper() for x in args.run]
+        suite_map = {**DEFAULT_SUITE, **LLM_SUITE}
 
     run_results: dict[str, dict] = {}
     for tid in run_ids:
-        script_name = DEFAULT_SUITE.get(tid)
+        script_name = suite_map.get(tid)
         if not script_name:
             run_results[tid] = {"ok": False, "error": "unknown task id"}
             continue
         script = ROOT / "evals" / "runners" / script_name
         extra: list[str] = []
-        if args.force_controlled and tid in {"T03", "T07", "T08"}:
+        if args.force_controlled and tid in {"T03", "T07", "T08", "LLM_T03"}:
             extra.append("--force-controlled")
         print(f"=== Running {tid}: {script.name} ===")
         run_results[tid] = _run_one(script, extra)
@@ -136,15 +175,7 @@ def main() -> int:
         "traces_dir": str(cfg.traces_dir),
         "ran": run_results,
         "latest_reports": {
-            k: {
-                "ok": v.get("ok"),
-                "task": v.get("task"),
-                "steps": len(v.get("steps") or []),
-                "step_ok": sum(1 for s in (v.get("steps") or []) if s.get("ok")),
-                "total_ms": sum(int(s.get("ms") or 0) for s in (v.get("steps") or [])),
-                "report": v.get("_report_path"),
-            }
-            for k, v in latest.items()
+            k: _summarize_report(v) for k, v in latest.items()
         },
     }
 

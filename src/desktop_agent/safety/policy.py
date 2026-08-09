@@ -18,6 +18,16 @@ _SUBMIT_HINTS = (
     "卸载",
 )
 
+# Win11 Notepad gear — clicking it strands the agent in Settings.
+_NOTEPAD_SETTINGS_HINTS = (
+    "设置",
+    "settings",
+    "app theme",
+    "应用主题",
+    "外观",
+    "appearance",
+)
+
 
 @dataclass
 class PolicyDecision:
@@ -75,6 +85,16 @@ class SafetyGuard:
                         require_confirm=True,
                         reason="Coordinate click requires confirmation",
                     )
+            if element is not None:
+                el_blob = f"{element.name} {element.role} {element.automation_id}".lower()
+                if any(h in el_blob for h in _NOTEPAD_SETTINGS_HINTS):
+                    app = (element.app or "").lower()
+                    if app in {"", "notepad", "notepad.exe"} or "notepad" in app:
+                        return PolicyDecision(
+                            allow=False,
+                            reject=True,
+                            reason="Refusing Notepad Settings UI (use notepad_type_text / notepad_save_as)",
+                        )
             if element is not None and element.source in {"ocr", "vlm"}:
                 threshold = self.config.min_confidence_to_act
                 if self.config.safety.confirm_coordinate_clicks or element.confidence < threshold:
@@ -101,6 +121,15 @@ class SafetyGuard:
 
         if name == "press_keys":
             keys = [str(k).lower() for k in (args.get("keys") or [])]
+            # Win11 Notepad: Ctrl+, opens Settings — never useful for agent tasks.
+            if ("ctrl" in keys or "control" in keys) and any(
+                k in {",", "comma", "oem_comma"} for k in keys
+            ):
+                return PolicyDecision(
+                    allow=False,
+                    reject=True,
+                    reason="Refusing Ctrl+, (opens Notepad Settings)",
+                )
             if "delete" in keys or ("alt" in keys and "f4" in keys):
                 return PolicyDecision(
                     allow=True,

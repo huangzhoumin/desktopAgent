@@ -16,6 +16,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _llm_common import NOTEPAD_TOOLS, close_stray_notepads  # noqa: E402
 from desktop_agent.config import load_config  # noqa: E402
 from desktop_agent.orchestrator import Orchestrator  # noqa: E402
 
@@ -24,9 +27,12 @@ MARKER = "DesktopAgent-LLM-T01-你好-Hello-12345"
 
 def build_goal(out: Path, marker: str) -> str:
     return (
-        f"打开记事本，清空后输入以下全文（不要改动）：\n{marker}\n"
-        f"然后另存为到这个路径（必须真正写入磁盘）：\n{out}\n"
-        "保存完成后用工具确认该文件存在且包含上述文本，再结束。"
+        "先 launch_app app=notepad 打开一个新的无标题记事本（不要复用已打开的已命名窗口）。\n"
+        "然后只用 notepad_type_text 与 notepad_save_as（不要点齿轮/设置，不要进记事本设置页）。\n"
+        f"清空后输入以下全文（不要改动）：\n{marker}\n"
+        f"然后 notepad_save_as 到这个路径（必须真正写入磁盘）：\n{out}\n"
+        "若 save_as 失败就立刻再试一次 notepad_save_as（同一路径）。\n"
+        "保存完成后用 verify_file 确认该文件存在且包含上述文本，再 done。\n"
         "仅仅弹出「另存为」对话框不算完成。"
     )
 
@@ -50,10 +56,14 @@ def main() -> int:
     marker = str(args.marker)
     if out.exists():
         out.unlink()
+    closed = close_stray_notepads()
+    if closed:
+        print(f"[prep] closed {closed} stray Notepad window(s)")
 
     cfg = load_config()
     cfg.runtime.max_steps = int(args.max_steps)
     cfg.llm.max_tool_rounds = int(args.max_steps)
+    cfg.llm.timeout_s = max(float(cfg.llm.timeout_s or 0), 300.0)
 
     if not cfg.llm.configured:
         print(
@@ -100,7 +110,12 @@ def main() -> int:
 
     goal = build_goal(out, marker)
     print(f"[goal]\n{goal}\n")
-    orch = Orchestrator.create(cfg, ask_user_fn=ask_user, confirm_fn=confirm)
+    orch = Orchestrator.create(
+        cfg,
+        ask_user_fn=ask_user,
+        confirm_fn=confirm,
+        allowed_tools=NOTEPAD_TOOLS,
+    )
     t0 = time.perf_counter()
     summary = orch.run(goal)
     elapsed_ms = int((time.perf_counter() - t0) * 1000)

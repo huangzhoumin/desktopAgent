@@ -34,7 +34,13 @@ py -m desktop_agent browser-probe
 - Excel / Word COM；WPS 表格/文字读写与保存
 - 无 LLM 闭环评测 + 汇总看板：
   - T01 Notepad：`py -m desktop_agent eval-t01`
-  - LLM T01 Notepad（必须真正写入文件）：`py -m desktop_agent eval-llm-t01`
+  - LLM e2e（以磁盘/DOM 为准，默认 `--yes`）：
+    - T01 Notepad：`py -m desktop_agent eval-llm-t01`
+    - T02 Edge 填表：`py -m desktop_agent eval-llm-t02`
+    - T03 Chrome 填表：`py -m desktop_agent eval-llm-t03`
+    - T04 Excel：`py -m desktop_agent eval-llm-t04`
+    - T05 Word：`py -m desktop_agent eval-llm-t05`
+    - 汇总：`py -m desktop_agent eval-dashboard --llm-suite`
   - T02 Edge 填表（Attach 或模式 A 降级）：`py -m desktop_agent eval-t02`
   - T03 Chrome：`py -m desktop_agent eval-t03 --force-controlled`
   - T04 Excel：`py -m desktop_agent eval-t04`

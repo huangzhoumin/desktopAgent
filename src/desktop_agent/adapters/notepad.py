@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -88,14 +89,37 @@ class NotepadAdapter:
             detail={"title": win.Name, "hwnd": self._hwnd},
         )
 
+    def attach_latest(self) -> ActionResult:
+        """Bind to the newest Notepad window (e.g. after launch_app)."""
+        wins = self._list_notepad_windows()
+        if not wins:
+            raise AdapterUnavailable("Notepad window not found")
+        # Prefer untitled / freshly launched windows.
+        preferred = None
+        for w in wins:
+            if self._is_untitled(str(w.Name or "")) and not self._is_settings_view(w):
+                preferred = w
+                break
+        win = preferred or wins[-1]
+        self._ensure_editing(win)
+        self._hwnd = int(win.NativeWindowHandle or 0)
+        self._pid = int(win.ProcessId)
+        self._activate(win)
+        return ActionResult(
+            action="notepad_attach",
+            ok=True,
+            detail={"title": win.Name, "hwnd": self._hwnd, "pid": self._pid},
+        )
+
     def type_text(self, text: str, clear: bool = True) -> ActionResult:
         win = self._target_window()
         if win is None:
             raise AdapterUnavailable("Notepad window not found")
         self._activate(win)
+        self._ensure_editing(win)
         edit = self._find_editor(win)
         if edit is None:
-            raise ElementNotFound("Notepad editor control not found")
+            raise ElementNotFound("Notepad editor control not found (left settings?)")
         try:
             edit.SetFocus()
         except Exception:
@@ -136,7 +160,13 @@ class NotepadAdapter:
         if win is None:
             raise AdapterUnavailable("Notepad window not found")
         self._activate(win)
+        self._ensure_editing(win)
         time.sleep(0.12)
+
+        def _strategy(name: str):
+            # Escape menus / settings left by a previous failed attempt.
+            self._dismiss_chrome_ui(win)
+            self._open_strategy(name, win)
 
         result = self._dialogs.save_as(
             path,
@@ -144,10 +174,10 @@ class NotepadAdapter:
             owner_hwnd=self._hwnd,
             owner_pid=self._pid,
             open_strategies=[
-                lambda: self._open_strategy("ctrl_shift_s", win),
-                lambda: self._open_strategy("ctrl_s_untitled", win),
-                lambda: self._open_strategy("alt_f_a", win),
-                lambda: self._open_strategy("menu_click", win),
+                # Prefer shortcuts; Alt menus on Win11 Notepad can land in Settings.
+                lambda: _strategy("ctrl_shift_s"),
+                lambda: _strategy("ctrl_s_untitled"),
+                lambda: _strategy("menu_click"),
             ],
             wait_file_s=6.0,
         )
@@ -158,15 +188,144 @@ class NotepadAdapter:
 
     def _open_strategy(self, name: str, win) -> None:
         self._activate(win)
+        self._ensure_editing(win)
         time.sleep(0.05)
         if name == "ctrl_shift_s":
             auto.SendKeys("{Ctrl}{Shift}s", waitTime=0.12)
         elif name == "ctrl_s_untitled":
             self._ctrl_s_if_untitled(win)
-        elif name == "alt_f_a":
-            self._alt_file_save_as()
         elif name == "menu_click":
             self._click_save_as_menu(win)
+
+    def _ensure_editing(self, win) -> None:
+        """Leave Win11 Notepad Settings / menus so the document editor is usable."""
+        self._dismiss_chrome_ui(win)
+        if self._is_settings_view(win):
+            self._leave_settings(win)
+            time.sleep(0.2)
+            self._dismiss_chrome_ui(win)
+
+    def _dismiss_chrome_ui(self, win) -> None:
+        """Close flyouts/menus without navigating into Settings (avoid Alt chords)."""
+        try:
+            self._activate(win)
+            auto.SendKeys("{Esc}", waitTime=0.05)
+            time.sleep(0.05)
+            auto.SendKeys("{Esc}", waitTime=0.05)
+        except Exception:
+            pass
+
+    def _is_settings_view(self, win) -> bool:
+        markers = (
+            "应用主题",
+            "App theme",
+            "外观",
+            "Appearance",
+            "拼写检查",
+            "Spelling",
+            "打开文件时",
+            "When Notepad starts",
+        )
+        for name in markers:
+            try:
+                ctrl = win.TextControl(searchDepth=16, Name=name)
+                if ctrl.Exists(0.15, 0.05):
+                    return True
+            except Exception:
+                continue
+            try:
+                ctrl = win.Control(searchDepth=16, Name=name)
+                if ctrl.Exists(0.1, 0.05):
+                    return True
+            except Exception:
+                continue
+        # Settings page has no document editor.
+        if self._find_editor(win) is None:
+            for name in ("设置", "Settings"):
+                try:
+                    ctrl = win.TextControl(searchDepth=10, Name=name)
+                    if ctrl.Exists(0.15, 0.05):
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    def _leave_settings(self, win) -> None:
+        self._activate(win)
+        # Title-bar back arrow (WinUI).
+        for name in ("Back", "返回", "Navigate back", "上一步"):
+            try:
+                btn = win.ButtonControl(searchDepth=12, Name=name)
+                if btn.Exists(0.25, 0.05):
+                    self._invoke_or_click(btn)
+                    time.sleep(0.25)
+                    if not self._is_settings_view(win):
+                        return
+            except Exception:
+                continue
+        # Fallback: Escape / Alt+Left (do NOT use Ctrl+, which opens Settings).
+        for keys in ("{Esc}", "{Alt}{Left}"):
+            try:
+                auto.SendKeys(keys, waitTime=0.1)
+                time.sleep(0.2)
+                if not self._is_settings_view(win):
+                    return
+            except Exception:
+                continue
+        # Still on Settings — close the window (discard) rather than strand the agent.
+        try:
+            self._hwnd = int(win.NativeWindowHandle or 0) or self._hwnd
+            self._pid = int(win.ProcessId)
+        except Exception:
+            pass
+        self.close(discard=True)
+
+    def close_if_settings_vlm(self, vlm, *, min_confidence: float = 0.55) -> ActionResult:
+        """Screenshot + VLM: if this is Notepad Settings, close the window immediately."""
+        from desktop_agent.perception.capture import capture_screen
+
+        wins = self._list_notepad_windows()
+        if not wins:
+            return ActionResult(
+                action="notepad_close_if_settings_vlm",
+                ok=True,
+                detail={"closed": False, "reason": "no_notepad"},
+            )
+
+        win = wins[0]
+        self._hwnd = int(win.NativeWindowHandle or 0)
+        self._pid = int(win.ProcessId)
+        self._activate(win)
+        rect = window_rect(self._hwnd) if self._hwnd else None
+        shot = Path(tempfile.gettempdir()) / "desktop-agent-notepad-vlm.png"
+        bounds = None
+        if rect:
+            x, y, r, b = rect
+            bounds = (x, y, max(1, r - x), max(1, b - y))
+        cap = capture_screen(shot, scope="foreground" if bounds else "full", bounds=bounds)
+        verdict = vlm.classify_page(
+            cap.path,
+            "Is this the Windows Notepad Settings page (设置), "
+            "e.g. showing 外观/应用主题 or Appearance/App theme? "
+            "Answer match=true only for Notepad Settings, not the editor.",
+        )
+        if not verdict.get("match") or float(verdict.get("confidence") or 0) < min_confidence:
+            return ActionResult(
+                action="notepad_close_if_settings_vlm",
+                ok=True,
+                detail={"closed": False, "vlm": verdict, "screenshot": cap.path},
+            )
+        closed = self.close(discard=True)
+        return ActionResult(
+            action="notepad_close_if_settings_vlm",
+            ok=True,
+            detail={
+                "closed": True,
+                "vlm": verdict,
+                "screenshot": cap.path,
+                "close": closed.detail,
+            },
+        )
 
     def read_editor_text(self) -> str:
         win = self._target_window()
@@ -204,13 +363,6 @@ class NotepadAdapter:
         if win and self._is_untitled(str(win.Name or "")):
             auto.SendKeys("{Ctrl}s", waitTime=0.12)
 
-    def _alt_file_save_as(self, win=None):
-        auto.SendKeys("{Alt}", waitTime=0.08)
-        time.sleep(0.12)
-        auto.SendKeys("f", waitTime=0.08)
-        time.sleep(0.25)
-        auto.SendKeys("a", waitTime=0.08)
-
     def _click_save_as_menu(self, win=None):
         win = win or self._target_window()
         if win is None:
@@ -228,10 +380,19 @@ class NotepadAdapter:
         if self._hwnd:
             win = self._control_by_hwnd(self._hwnd)
             if win is not None:
+                if self._is_settings_view(win):
+                    self._leave_settings(win)
                 return win
-        # Fallback for interrupted sessions
+        # Fallback for interrupted sessions — skip Settings pages.
         for w in self._list_notepad_windows():
+            if self._is_settings_view(w):
+                continue
             if self._is_untitled(str(w.Name or "")):
+                self._hwnd = int(w.NativeWindowHandle or 0)
+                self._pid = int(w.ProcessId)
+                return w
+        for w in self._list_notepad_windows():
+            if not self._is_settings_view(w):
                 self._hwnd = int(w.NativeWindowHandle or 0)
                 self._pid = int(w.ProcessId)
                 return w

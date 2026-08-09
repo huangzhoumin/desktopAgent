@@ -344,6 +344,80 @@ def eval_llm_t01(
     _run_eval_script("llm_t01_notepad.py", args)
 
 
+@app.command("eval-llm-t02")
+def eval_llm_t02(
+    html: Optional[Path] = typer.Option(None, "--html", help="Local HTML form path"),
+    max_steps: int = typer.Option(12, "--max-steps"),
+    no_yes: bool = typer.Option(False, "--no-yes", help="Disable auto-confirm"),
+) -> None:
+    """Run LLM e2e T02 Edge form fill; pass only if #preview contains expected fields."""
+    args: list[str] = ["--max-steps", str(max_steps)]
+    if html:
+        args.extend(["--html", str(html)])
+    if no_yes:
+        args.append("--no-yes")
+    _run_eval_script("llm_t02_edge.py", args)
+
+
+@app.command("eval-llm-t03")
+def eval_llm_t03(
+    html: Optional[Path] = typer.Option(None, "--html", help="Local HTML form path"),
+    max_steps: int = typer.Option(12, "--max-steps"),
+    no_yes: bool = typer.Option(False, "--no-yes", help="Disable auto-confirm"),
+    no_force_controlled: bool = typer.Option(
+        False, "--no-force-controlled", help="Allow CDP attach instead of controlled Chrome"
+    ),
+) -> None:
+    """Run LLM e2e T03 Chrome form fill (default controlled mode A)."""
+    args: list[str] = ["--max-steps", str(max_steps)]
+    if html:
+        args.extend(["--html", str(html)])
+    if no_yes:
+        args.append("--no-yes")
+    if no_force_controlled:
+        args.append("--no-force-controlled")
+    _run_eval_script("llm_t03_chrome.py", args)
+
+
+@app.command("eval-llm-t04")
+def eval_llm_t04(
+    out: Optional[Path] = typer.Option(None, "--out", help="Output xlsx path"),
+    max_steps: int = typer.Option(10, "--max-steps"),
+    no_yes: bool = typer.Option(False, "--no-yes", help="Disable auto-confirm"),
+    keep_open: bool = typer.Option(False, "--keep-open"),
+) -> None:
+    """Run LLM e2e T04 Excel write A1:B2 + save; pass only if disk values match."""
+    args: list[str] = ["--max-steps", str(max_steps)]
+    if out:
+        args.extend(["--out", str(out)])
+    if no_yes:
+        args.append("--no-yes")
+    if keep_open:
+        args.append("--keep-open")
+    _run_eval_script("llm_t04_excel.py", args)
+
+
+@app.command("eval-llm-t05")
+def eval_llm_t05(
+    out: Optional[Path] = typer.Option(None, "--out", help="Output docx path"),
+    marker: Optional[str] = typer.Option(None, "--marker"),
+    max_steps: int = typer.Option(10, "--max-steps"),
+    no_yes: bool = typer.Option(False, "--no-yes", help="Disable auto-confirm"),
+    keep_open: bool = typer.Option(False, "--keep-open"),
+) -> None:
+    """Run LLM e2e T05 Word type + save; pass only if docx contains marker."""
+    args: list[str] = ["--max-steps", str(max_steps)]
+    if out:
+        args.extend(["--out", str(out)])
+    if marker:
+        args.extend(["--marker", marker])
+    if no_yes:
+        args.append("--no-yes")
+    if keep_open:
+        args.append("--keep-open")
+    _run_eval_script("llm_t05_word.py", args)
+
+
 @app.command("eval-t02")
 def eval_t02(
     html: Optional[Path] = typer.Option(None, "--html", help="Local HTML form path"),
@@ -513,6 +587,7 @@ def eval_t12(
 @app.command("eval-dashboard")
 def eval_dashboard(
     suite: bool = typer.Option(False, "--suite", help="Run T01-T08 then aggregate"),
+    llm_suite: bool = typer.Option(False, "--llm-suite", help="Run LLM_T01-LLM_T05 then aggregate"),
     run: Optional[list[str]] = typer.Option(None, "--run", help="Task ids to run, e.g. T01"),
     force_controlled: bool = typer.Option(False, "--force-controlled"),
     out: Optional[Path] = typer.Option(None, "--out"),
@@ -522,6 +597,8 @@ def eval_dashboard(
     args: list[str] = []
     if suite:
         args.append("--suite")
+    if llm_suite:
+        args.append("--llm-suite")
     if run:
         args.append("--run")
         args.extend(run)

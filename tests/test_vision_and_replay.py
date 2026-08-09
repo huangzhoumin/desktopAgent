@@ -50,6 +50,33 @@ def test_safety_requires_confirm_for_ocr_click():
     assert decision.require_confirm
 
 
+def test_safety_rejects_notepad_settings_click():
+    cfg = AgentConfig(safety=SafetyConfig())
+    guard = SafetyGuard(cfg)
+    el = UIElement(
+        element_id="el_settings",
+        source="uia",
+        app="notepad",
+        window_id="win_1",
+        role="Button",
+        name="设置",
+        bounds=Bounds(10, 10, 24, 24),
+        confidence=1.0,
+    )
+    decision = guard.check_tool(ToolCall(name="click", arguments={"target": "el_settings"}), element=el)
+    assert decision.reject
+    assert not decision.allow
+
+
+def test_safety_rejects_ctrl_comma_settings_chord():
+    cfg = AgentConfig(safety=SafetyConfig())
+    guard = SafetyGuard(cfg)
+    decision = guard.check_tool(
+        ToolCall(name="press_keys", arguments={"keys": ["ctrl", ","]})
+    )
+    assert decision.reject
+
+
 def test_safety_requires_confirm_for_low_confidence_vlm_even_without_coord_flag():
     cfg = AgentConfig(
         safety=SafetyConfig(confirm_coordinate_clicks=False),

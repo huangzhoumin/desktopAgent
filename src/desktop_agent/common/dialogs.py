@@ -208,9 +208,14 @@ class FileDialogHelper:
             raise ElementNotFound("File dialog filename edit box not found")
 
         self._set_filename(edit, full)
-        time.sleep(0.2)
+        time.sleep(0.25)
+        # Re-read: Win11 common dialogs often keep an uncommitted ComboBox value
+        # unless we type via SendKeys and leave the field with a real click.
+        if not self._path_value_matches(self._read_value(edit), full):
+            self._set_filename(edit, full)
+            time.sleep(0.15)
 
-        if not self._click_confirm(dialog, confirm_names):
+        if not self._click_confirm(dialog, confirm_names, prefer_click=True):
             # Enter in the filename field usually confirms Save As.
             try:
                 edit.SetFocus()
@@ -299,8 +304,14 @@ class FileDialogHelper:
         if self._wait_file(path, min(2.0, wait_file_s)):
             return
 
-        # Retry confirms: Win11 dialogs often label the button "保存(&S)", and the
-        # first Invoke can no-op if the filename ComboBox value was not committed.
+        # Retry confirms: Win11 common-dialog Save often no-ops on Invoke; prefer
+        # a real click / Alt+S, then dismiss 确认另存为 (是(Y)).
+        still = self.wait_dialog(timeout_s=1.0) or dialog
+        self._click_confirm(still, self.CONFIRM_SAVE_NAMES, prefer_click=True)
+        self.dismiss_confirm_yes(timeout_s=2.0)
+        if self._wait_file(path, 2.0):
+            return
+
         for keys in ("{Alt}s", "{Enter}"):
             try:
                 auto.SendKeys(keys, waitTime=0.12)
@@ -372,29 +383,49 @@ class FileDialogHelper:
 
     def dismiss_confirm_yes(self, timeout_s: float = 2.0) -> None:
         deadline = time.time() + timeout_s
+        yes_names = ("是(&Y)", "是(Y)", "是", "Yes", "&Yes", "确认", "OK")
         while time.time() < deadline:
-            for name in ("是(&Y)", "是(Y)", "是", "Yes", "&Yes", "确认", "OK"):
-                try:
-                    btn = auto.ButtonControl(searchDepth=14, Name=name)
-                    if btn.Exists(0.2, 0.05):
-                        self._invoke_or_click(btn)
-                        return
-                except Exception:
-                    continue
-            # Partial name match for localized overwrite prompts.
+            # Prefer scoped lookup on overwrite / 确认另存为 hosts.
             try:
                 root = auto.GetRootControl()
                 for top in root.GetChildren():
                     title = str(getattr(top, "Name", "") or "")
-                    if not any(k in title for k in ("确认", "Confirm", "替换", "Replace", "已存在")):
+                    if not any(
+                        k in title
+                        for k in ("确认", "Confirm", "替换", "Replace", "已存在", "另存为", "Save As")
+                    ):
                         continue
+                    # Skip the main Save As filename dialog (has File name edit).
+                    if self.find_filename_edit(top) is not None and "确认" not in title and "Confirm" not in title:
+                        continue
+                    for name in yes_names:
+                        try:
+                            btn = top.ButtonControl(searchDepth=12, Name=name)
+                            if btn.Exists(0.2, 0.05):
+                                self._click_control(btn)
+                                time.sleep(0.25)
+                                return
+                        except Exception:
+                            continue
                     for btn in self._iter_buttons(top, limit=30):
                         label = str(getattr(btn, "Name", "") or "")
+                        if any(bad in label for bad in ("否", "No", "取消", "Cancel", "不保存")):
+                            continue
                         if any(k in label for k in ("是", "Yes", "确定", "OK")):
-                            self._invoke_or_click(btn)
+                            self._click_control(btn)
+                            time.sleep(0.25)
                             return
             except Exception:
                 pass
+            for name in yes_names:
+                try:
+                    btn = auto.ButtonControl(searchDepth=14, Name=name)
+                    if btn.Exists(0.15, 0.05):
+                        self._click_control(btn)
+                        time.sleep(0.25)
+                        return
+                except Exception:
+                    continue
             time.sleep(0.1)
 
     def click_button(
@@ -889,32 +920,40 @@ class FileDialogHelper:
             pass
         time.sleep(0.08)
 
-        set_ok = False
+        # Prefer typed input: Win11 common-dialog ComboBox often shows a
+        # ValuePattern value that is not committed until keys are sent.
+        auto.SendKeys("{Ctrl}a", waitTime=0.05)
+        auto.SendKeys(self._escape(full), waitTime=0.02)
+        time.sleep(0.12)
+        current = self._read_value(edit)
+        if self._path_value_matches(current, full):
+            return
+
         try:
             edit.GetValuePattern().SetValue(full)
-            set_ok = True
         except Exception:
             pass
-
-        # Commit ComboBox / Edit value; re-read and fall back to SendKeys if needed.
+        time.sleep(0.08)
         current = self._read_value(edit)
-        if not set_ok or not self._path_value_matches(current, full):
+        if not self._path_value_matches(current, full):
             auto.SendKeys("{Ctrl}a", waitTime=0.05)
             auto.SendKeys(self._escape(full), waitTime=0.02)
             time.sleep(0.1)
-            current = self._read_value(edit)
-            if current and not self._path_value_matches(current, full):
-                # Last resort: retype once more.
-                auto.SendKeys("{Ctrl}a", waitTime=0.05)
-                auto.SendKeys(self._escape(full), waitTime=0.02)
 
-    def _click_confirm(self, dialog, confirm_names: tuple[str, ...]) -> bool:
+    def _click_confirm(
+        self,
+        dialog,
+        confirm_names: tuple[str, ...],
+        *,
+        prefer_click: bool = False,
+    ) -> bool:
+        click = self._click_control if prefer_click else self._invoke_or_click
         # Exact names first (includes 保存(&S) variants).
         for name in confirm_names:
             try:
                 btn = dialog.ButtonControl(searchDepth=18, Name=name)
                 if btn.Exists(0.35, 0.05):
-                    self._invoke_or_click(btn)
+                    click(btn)
                     time.sleep(0.45)
                     return True
             except Exception:
@@ -928,7 +967,7 @@ class FileDialogHelper:
                 continue
             if "保存" in label or low.strip() in {"save", "&save"} or "save" == low.replace("&", "").strip():
                 try:
-                    self._invoke_or_click(btn)
+                    click(btn)
                     time.sleep(0.45)
                     return True
                 except Exception:
@@ -1046,17 +1085,32 @@ class FileDialogHelper:
         return bool(cur_name) and cur_name == exp_name
 
     @staticmethod
+    def _click_control(ctrl) -> None:
+        """Prefer a real click — Win11 common-dialog Save often no-ops on Invoke."""
+        try:
+            ctrl.Click(simulateMove=False)
+            return
+        except Exception:
+            pass
+        try:
+            rect = ctrl.BoundingRectangle
+            auto.Click(rect.xcenter(), rect.ycenter())
+            return
+        except Exception:
+            pass
+        try:
+            ctrl.GetInvokePattern().Invoke()
+        except Exception:
+            pass
+
+    @staticmethod
     def _invoke_or_click(ctrl) -> None:
         try:
             ctrl.GetInvokePattern().Invoke()
             return
         except Exception:
             pass
-        try:
-            ctrl.Click(simulateMove=False)
-        except Exception:
-            rect = ctrl.BoundingRectangle
-            auto.Click(rect.xcenter(), rect.ycenter())
+        FileDialogHelper._click_control(ctrl)
 
     @staticmethod
     def _escape(text: str) -> str:

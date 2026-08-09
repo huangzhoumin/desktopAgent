@@ -81,6 +81,54 @@ class VlmLocator:
             "transport": "ollama_native" if self._is_ollama() else "openai_compatible",
         }
 
+    def classify_page(
+        self,
+        image_path: str | Path,
+        question: str,
+    ) -> dict[str, Any]:
+        """Ask the VLM a yes/no-style page classification; returns parsed JSON dict.
+
+        Expected shape: {"match": bool, "confidence": float, "label": str, "notes": str}
+        """
+        path = Path(image_path)
+        if not path.exists():
+            raise VlmError(f"Screenshot not found: {path}")
+        if not self.llm.configured:
+            raise VlmError("LLM not configured for VLM")
+
+        prompt = (
+            "You are a desktop UI vision assistant. Look at the screenshot and answer.\n"
+            f"Question: {question}\n"
+            "Return ONLY valid JSON (no markdown):\n"
+            '{"match": true|false, "confidence": 0.0-1.0, "label": "short page name", "notes": "..."}\n'
+        )
+        try:
+            if self._is_ollama():
+                content = self._locate_ollama_native(path, prompt)
+            else:
+                content = self._locate_openai_compatible(path, prompt, top_k=1)
+        except VlmError:
+            raise
+        except Exception as e:
+            raise VlmError(str(e)) from e
+
+        data = _parse_json_object(content)
+        match = data.get("match")
+        if isinstance(match, str):
+            match = match.strip().lower() in {"true", "yes", "1", "是"}
+        conf = data.get("confidence", 0.0)
+        try:
+            confidence = float(conf)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        return {
+            "match": bool(match),
+            "confidence": max(0.0, min(1.0, confidence)),
+            "label": str(data.get("label") or "")[:120],
+            "notes": str(data.get("notes") or "")[:240],
+            "raw": data,
+        }
+
     def locate(
         self,
         image_path: str | Path,

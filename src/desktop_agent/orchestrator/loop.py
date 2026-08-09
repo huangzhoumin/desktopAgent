@@ -35,8 +35,11 @@ class Orchestrator:
     last_error: dict[str, Any] | None = None
     adapter_hints: str = (
         "Use launch_app to start missing apps. Prefer excel_* COM for Excel cells; "
-        "browser_* for web pages (attach or controlled fallback); "
-        "for Notepad use notepad_type_text + notepad_save_as (closed-loop; waits for file); "
+        "word_new + word_type_text + word_save for Word; "
+        "browser_navigate / browser_fill / browser_click / browser_snapshot for web forms "
+        "(attach or controlled fallback; prefer css locators like #name); "
+        "for Notepad use ONLY notepad_type_text + notepad_save_as "
+        "(never open 设置/Settings/gear; if stuck there Esc/Back then continue); "
         "dialog_save_as only when a native Save As dialog is already visible; "
         "after any save, call verify_file before done — a visible 另存为 dialog alone is not success; "
         "UIA get_ui_summary/find_elements/click/type_text for generic apps; "
@@ -58,11 +61,12 @@ class Orchestrator:
         ask_user_fn: UserAskFn | None = None,
         confirm_fn: UserConfirmFn | None = None,
         task_id: str | None = None,
+        allowed_tools: set[str] | list[str] | None = None,
     ) -> Orchestrator:
         tid = task_id or new_id("tsk")
         trace = TraceStore(config.traces_dir, task_id=tid)
         rt = runtime or ToolRuntime(config, trace=trace)
-        pl = planner or LlmPlanner(config)
+        pl = planner or LlmPlanner(config, allowed_tools=allowed_tools)
         return cls(
             config=config,
             runtime=rt,

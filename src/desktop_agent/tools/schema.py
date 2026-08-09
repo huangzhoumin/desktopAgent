@@ -39,6 +39,7 @@ RUNTIME_TOOLS = frozenset(
         "excel_get_range",
         "excel_set_range",
         "excel_save",
+        "word_new",
         "word_type_text",
         "word_save",
         "wps_probe",
@@ -525,8 +526,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     ),
     _tool(
+        "word_new",
+        "Create a new blank document in Microsoft Word via COM.",
+        {"type": "object", "properties": {}},
+    ),
+    _tool(
         "word_type_text",
-        "Type text into the active Word document via COM.",
+        "Type text into the active Word document via COM (creates a doc if none open).",
         {
             "type": "object",
             "required": ["text"],
@@ -628,6 +634,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 
-def openai_tools() -> list[dict[str, Any]]:
-    return TOOL_SCHEMAS
+def openai_tools(allowed: set[str] | list[str] | None = None) -> list[dict[str, Any]]:
+    if not allowed:
+        return TOOL_SCHEMAS
+    allow = set(allowed)
+    return [t for t in TOOL_SCHEMAS if str((t.get("function") or {}).get("name") or "") in allow]
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from desktop_agent.errors import AdapterUnavailable
@@ -46,6 +47,10 @@ class ExcelAdapter:
         xl.Visible = True
         xl.DisplayAlerts = False
         wb = xl.Workbooks.Add()
+        try:
+            wb.Activate()
+        except Exception:
+            pass
         return ActionResult(
             action="excel_new",
             ok=True,
@@ -57,12 +62,12 @@ class ExcelAdapter:
         if xl.Workbooks.Count == 0:
             raise AdapterUnavailable("No open workbook")
         wb = xl.ActiveWorkbook
-        ws = wb.Worksheets(sheet) if sheet else wb.ActiveSheet
+        ws = self._worksheet(wb, sheet)
         value = ws.Range(range_addr).Value
         return ActionResult(
             action="excel_get_range",
             ok=True,
-            detail={"range": range_addr, "sheet": sheet, "value": value},
+            detail={"range": range_addr, "sheet": getattr(ws, "Name", sheet), "value": value},
         )
 
     def set_range(self, range_addr: str, value, sheet: str | None = None) -> ActionResult:
@@ -70,12 +75,12 @@ class ExcelAdapter:
         if xl.Workbooks.Count == 0:
             raise AdapterUnavailable("No open workbook")
         wb = xl.ActiveWorkbook
-        ws = wb.Worksheets(sheet) if sheet else wb.ActiveSheet
+        ws = self._worksheet(wb, sheet)
         ws.Range(range_addr).Value = value
         return ActionResult(
             action="excel_set_range",
             ok=True,
-            detail={"range": range_addr, "sheet": sheet, "value": value},
+            detail={"range": range_addr, "sheet": getattr(ws, "Name", sheet), "value": value},
         )
 
     def save(self, path: str | None = None) -> ActionResult:
@@ -91,12 +96,53 @@ class ExcelAdapter:
         xl = self._get()
         if xl.Workbooks.Count == 0:
             raise AdapterUnavailable("No open workbook")
-        out = Path(path).resolve()
+        out = self._normalize_path(path)
         out.parent.mkdir(parents=True, exist_ok=True)
+        if out.exists():
+            try:
+                out.unlink()
+            except Exception:
+                pass
         xl.DisplayAlerts = False
-        # 51 = xlOpenXMLWorkbook (.xlsx)
-        xl.ActiveWorkbook.SaveAs(str(out), FileFormat=51)
-        return ActionResult(action="excel_save", ok=True, detail={"path": str(out)})
+        wb = xl.ActiveWorkbook
+        target = str(out)
+        last_err: Exception | None = None
+        # 51 = xlOpenXMLWorkbook (.xlsx). Try several COM calling conventions.
+        for call in (
+            lambda: wb.SaveAs(target, FileFormat=51),
+            lambda: wb.SaveAs(Filename=target, FileFormat=51),
+            lambda: wb.SaveAs(target),
+            lambda: wb.SaveAs(Filename=target),
+        ):
+            try:
+                call()
+                return ActionResult(action="excel_save", ok=True, detail={"path": target})
+            except Exception as e:
+                last_err = e
+                continue
+        raise AdapterUnavailable(f"Excel SaveAs failed: {last_err}") from last_err
+
+    @staticmethod
+    def _normalize_path(path: str | Path) -> Path:
+        text = str(path).strip().strip('"').strip("'")
+        # Models sometimes emit JSON-escaped paths: C:\\Users\\...
+        while "\\\\" in text:
+            text = text.replace("\\\\", "\\")
+        text = text.replace("/", "\\")
+        return Path(text).expanduser().resolve()
+
+    @staticmethod
+    def _worksheet(wb, sheet: str | None):
+        if not sheet:
+            return wb.ActiveSheet
+        name = str(sheet).strip()
+        # LLMs often pass workbook title (工作簿1 / Book1) as sheet=.
+        if re.fullmatch(r"(工作簿|Book)\s*\d+", name, flags=re.IGNORECASE):
+            return wb.ActiveSheet
+        try:
+            return wb.Worksheets(name)
+        except Exception:
+            return wb.ActiveSheet
 
     def open(self, path: str) -> ActionResult:
         xl = self._get()

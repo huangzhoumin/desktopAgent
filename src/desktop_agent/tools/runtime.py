@@ -84,7 +84,16 @@ class ToolRuntime:
                 self.safety.assert_window_allowed(info)
             return self.action.focus_window(kwargs["window_id"])
         if name == "launch_app":
-            return self.apps.launch(kwargs["app"], args=kwargs.get("args"))
+            result = self.apps.launch(kwargs["app"], args=kwargs.get("args"))
+            # Bind NotepadAdapter to the new window so later notepad_* tools
+            # do not latch onto an old Settings page / wrong tab.
+            detail = getattr(result, "detail", None) or {}
+            if str(detail.get("app") or "").lower() == "notepad":
+                try:
+                    self.notepad.attach_latest()
+                except Exception:
+                    pass
+            return result
         if name == "notepad_type_text":
             return self.notepad.type_text(
                 kwargs["text"],
@@ -280,6 +289,8 @@ class ToolRuntime:
             return self.excel.save(kwargs.get("path"))
         if name == "excel_open":
             return self.excel.open(kwargs["path"])
+        if name == "word_new":
+            return self.word.new()
         if name == "word_type_text":
             return self.word.type_text(kwargs["text"])
         if name == "word_save":

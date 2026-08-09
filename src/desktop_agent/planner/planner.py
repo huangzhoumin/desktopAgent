@@ -22,7 +22,7 @@ Rules:
 1. Call exactly one tool per turn (or ask_user / done).
 2. Prefer semantic tools: browser_* for pages, excel_* / word_* for Office, UIA find+click/type for generic apps.
 3. If an app window is missing, call launch_app (notepad/excel/word/edge/chrome) instead of ask_user.
-4. After launch_app: list_windows -> focus_window -> type/click. For Notepad prefer notepad_type_text then notepad_save_as.
+4. After launch_app: list_windows -> focus_window -> type/click. For Notepad ONLY use notepad_type_text then notepad_save_as — never open Notepad Settings (设置), never click the gear, never press Ctrl+,. For Word prefer word_new then word_type_text then word_save.
 5. Never dump or request the full UIA tree; use get_ui_summary / find_elements with filters.
 6. After mutating the UI, verify with get_ui_summary, find_elements, excel_get_range, browser_snapshot, or verify_file as needed.
 7. Do not ask_user repeatedly for the same blocker — retry focus/find/type first; ask_user only when truly stuck.
@@ -45,10 +45,17 @@ class Planner(Protocol):
 
 
 class LlmPlanner:
-    def __init__(self, config: AgentConfig, client: OpenAICompatibleClient | None = None):
+    def __init__(
+        self,
+        config: AgentConfig,
+        client: OpenAICompatibleClient | None = None,
+        *,
+        allowed_tools: set[str] | list[str] | None = None,
+    ):
         self.config = config
         self.client = client or OpenAICompatibleClient(config.llm)
-        self.tools = openai_tools()
+        self.allowed_tools = set(allowed_tools) if allowed_tools else None
+        self.tools = openai_tools(self.allowed_tools)
 
     def next_action(
         self,
@@ -59,7 +66,25 @@ class LlmPlanner:
     ) -> ToolCall:
         messages = self._build_messages(goal, history, adapter_hints=adapter_hints)
         message = self.client.chat(messages, tools=self.tools, tool_choice="required")
-        return self._message_to_tool_call(message)
+        try:
+            return self._message_to_tool_call(message)
+        except PlannerError as first_err:
+            # Local models occasionally return prose despite tool_choice=required.
+            nudge = {
+                "role": "user",
+                "content": (
+                    "You must call exactly one tool now via tool_calls "
+                    "(not plain text). If a save just failed, retry notepad_save_as / "
+                    "excel_save / word_save or launch_app as appropriate. "
+                    "Do not explain — call a tool."
+                ),
+            }
+            retry_messages = messages + [nudge]
+            message = self.client.chat(retry_messages, tools=self.tools, tool_choice="required")
+            try:
+                return self._message_to_tool_call(message)
+            except PlannerError:
+                raise first_err from None
 
     def _build_messages(
         self,
@@ -108,6 +133,11 @@ class LlmPlanner:
         name = str(fn.get("name") or "").strip()
         if name not in ALL_TOOLS:
             raise PlannerError(f"Unknown tool from LLM: {name}", code="LLM_INVALID_TOOL")
+        if self.allowed_tools is not None and name not in self.allowed_tools:
+            raise PlannerError(
+                f"Tool not allowed in this task: {name}",
+                code="LLM_INVALID_TOOL",
+            )
 
         args = parse_tool_arguments(fn.get("arguments"))
         return ToolCall(
