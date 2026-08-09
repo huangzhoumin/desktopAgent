@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from desktop_agent.action.executor import ActionExecutor
-from desktop_agent.adapters.apps import AppLauncher
+from desktop_agent.adapters.apps import AppLauncher, normalize_app_alias
 from desktop_agent.adapters.browser import BrowserAdapter
 from desktop_agent.adapters.excel import ExcelAdapter
 from desktop_agent.adapters.notepad import NotepadAdapter
@@ -16,7 +16,7 @@ from desktop_agent.common.dialogs import FileDialogHelper
 from desktop_agent.config import AgentConfig
 from desktop_agent.errors import AgentError, PermissionDenied, TimeoutError_
 from desktop_agent.memory.trace import TraceStore
-from desktop_agent.models import UIElement, new_id
+from desktop_agent.models import ActionResult, UIElement, new_id
 from desktop_agent.perception.capture import capture_screen
 from desktop_agent.perception.ocr import OcrEngine
 from desktop_agent.perception.uia import UiaPerception
@@ -84,15 +84,15 @@ class ToolRuntime:
                 self.safety.assert_window_allowed(info)
             return self.action.focus_window(kwargs["window_id"])
         if name == "launch_app":
-            result = self.apps.launch(kwargs["app"], args=kwargs.get("args"))
-            # Bind NotepadAdapter to the new window so later notepad_* tools
-            # do not latch onto an old Settings page / wrong tab.
-            detail = getattr(result, "detail", None) or {}
-            if str(detail.get("app") or "").lower() == "notepad":
-                try:
-                    self.notepad.attach_latest()
-                except Exception:
-                    pass
+            alias = normalize_app_alias(str(kwargs.get("app") or ""))
+            # Notepad: use closed-loop adapter (wait for HWND, Ctrl+N if tab-reuse,
+            # leave Settings) instead of fire-and-forget subprocess.
+            if alias == "notepad":
+                launched = self.notepad.launch(move_primary=True)
+                detail = dict(launched.detail or {})
+                detail.update({"app": "notepad", "via": "notepad_adapter"})
+                return ActionResult(action="launch_app", ok=True, detail=detail)
+            result = self.apps.launch(alias or kwargs["app"], args=kwargs.get("args"))
             return result
         if name == "notepad_type_text":
             return self.notepad.type_text(

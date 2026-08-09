@@ -687,11 +687,26 @@ def replay(
 def run(
     goal: str = typer.Argument(..., help="Natural language task"),
     config: Optional[Path] = typer.Option(None, "--config"),
-    yes: bool = typer.Option(False, "--yes", help="Auto-confirm policy prompts"),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        envvar="DESKTOP_AGENT_YES",
+        help="Auto-confirm policy prompts and auto-act instead of ask_user permission loops",
+    ),
     max_steps: Optional[int] = typer.Option(None, "--max-steps", help="Override max tool rounds"),
 ) -> None:
     """Run a natural-language task via the LLM orchestrator."""
+    from desktop_agent.adapters.apps import (
+        infer_launch_app_from_goal,
+        infer_launch_app_from_question,
+    )
     from desktop_agent.orchestrator import Orchestrator
+
+    # Unmistakable build marker (plain print survives theme/encoding issues).
+    # Note: do not put bare [tags] in Rich strings — they are markup.
+    print("BUILD=act-first", flush=True)
+    rprint(f"[bold yellow]BUILD=act-first[/]  module={__file__}")
 
     cfg = load_config(config)
     if max_steps is not None:
@@ -710,21 +725,41 @@ def run(
         raise typer.Exit(code=2)
 
     def ask_user(question: str, options: list[str] | None) -> str:
-        rprint(Panel(question, title="ask_user"))
-        if options:
-            rprint("Options: " + ", ".join(options))
+        # Belt-and-suspenders: never block the terminal on launch-permission asks.
+        alias = infer_launch_app_from_question(question or "", goal=goal) or (
+            infer_launch_app_from_goal(goal) if yes else None
+        )
+        if alias:
+            rprint(
+                f"[yellow]auto-act[/]: skip ask_user → launch_app app={alias}\n"
+                f"[dim]question was:[/] {question}"
+            )
+            return f"yes, launch {alias}"
         if yes:
-            # Non-interactive: pick an affirmative option when available.
+            rprint(Panel(question, title="ask_user"))
             if options:
+                rprint("Options: " + ", ".join(options))
                 for opt in options:
                     low = opt.lower()
-                    if low in {"y", "yes", "是", "ok", "true"} or "启动" in opt or "launch" in low:
+                    if low in {
+                        "y",
+                        "yes",
+                        "是",
+                        "好",
+                        "可以",
+                        "需要",
+                        "ok",
+                        "true",
+                    } or any(tok in opt for tok in ("启动", "打开", "launch", "open")):
                         rprint(f"[yellow]auto-answer[/]: {opt}")
                         return opt
                 rprint(f"[yellow]auto-answer[/]: {options[0]}")
                 return options[0]
             rprint("[yellow]auto-answer[/]: yes")
             return "yes"
+        rprint(Panel(question, title="ask_user"))
+        if options:
+            rprint("Options: " + ", ".join(options))
         try:
             return input("> ").strip()
         except EOFError:
@@ -741,8 +776,21 @@ def run(
             return False
         return ans in {"y", "yes", "是", "ok"}
 
-    rprint(Panel(goal, title="desktop-agent run"))
-    orch = Orchestrator.create(cfg, ask_user_fn=ask_user, confirm_fn=confirm)
+    title = "desktop-agent run | act-first" + (" | --yes" if yes else "")
+    rprint(Panel(goal, title=title))
+    if yes:
+        rprint(
+            "[bold yellow]--yes ON[/]: ask_user tool disabled; "
+            "missing apps auto launch_app"
+        )
+    else:
+        rprint("[red]WARNING: --yes not set; permission prompts may appear[/]")
+    orch = Orchestrator.create(
+        cfg,
+        ask_user_fn=ask_user,
+        confirm_fn=confirm,
+        auto_yes=yes,
+    )
     summary = orch.run(goal)
     _print_json(summary.to_dict())
     rprint(f"Trace: {orch.runtime.trace.dir}")

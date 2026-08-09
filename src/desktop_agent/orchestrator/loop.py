@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from desktop_agent.adapters.apps import (
+    infer_launch_app_from_goal,
+    infer_launch_app_from_question,
+)
 from desktop_agent.config import AgentConfig
 from desktop_agent.memory.trace import TraceStore
 from desktop_agent.models import TaskState, TaskSummary, ToolCall, new_id
@@ -16,6 +20,31 @@ from desktop_agent.tools.schema import CONTROL_TOOLS
 UserAskFn = Callable[[str, list[str] | None], str]
 UserConfirmFn = Callable[[str], bool]
 
+_AFFIRMATIVE = frozenset(
+    {
+        "y",
+        "yes",
+        "ok",
+        "true",
+        "是",
+        "好",
+        "好的",
+        "可以",
+        "需要",
+        "行",
+        "嗯",
+        "对",
+        "允许",
+        "同意",
+        "继续",
+        "启动",
+        "打开",
+        "launch",
+        "go",
+        "proceed",
+    }
+)
+
 
 @dataclass
 class Orchestrator:
@@ -25,20 +54,24 @@ class Orchestrator:
     safety: SafetyGuard | None = None
     ask_user_fn: UserAskFn | None = None
     confirm_fn: UserConfirmFn | None = None
+    # When True (--yes): never stall on permission-style ask_user; act or fail.
+    auto_yes: bool = False
     state: TaskState = TaskState.CREATED
     goal: str = ""
     task_id: str = field(default_factory=lambda: new_id("tsk"))
     history: list[dict[str, Any]] = field(default_factory=list)
     steps: int = 0
+    ask_user_rounds: int = 0
     pending_call: ToolCall | None = None
     last_result: dict[str, Any] | None = None
     last_error: dict[str, Any] | None = None
     adapter_hints: str = (
-        "Use launch_app to start missing apps. Prefer excel_* COM for Excel cells; "
+        "If 记事本/Notepad is missing, call launch_app app=notepad (never ask_user). "
+        "Prefer excel_* COM for Excel cells; "
         "word_new + word_type_text + word_save for Word; "
         "browser_navigate / browser_fill / browser_click / browser_snapshot for web forms "
         "(attach or controlled fallback; prefer css locators like #name); "
-        "for Notepad use ONLY notepad_type_text + notepad_save_as "
+        "for Notepad: launch_app notepad then ONLY notepad_type_text + notepad_save_as "
         "(never open 设置/Settings/gear; if stuck there Esc/Back then continue); "
         "dialog_save_as only when a native Save As dialog is already visible; "
         "after any save, call verify_file before done — a visible 另存为 dialog alone is not success; "
@@ -62,11 +95,19 @@ class Orchestrator:
         confirm_fn: UserConfirmFn | None = None,
         task_id: str | None = None,
         allowed_tools: set[str] | list[str] | None = None,
+        auto_yes: bool = False,
     ) -> Orchestrator:
         tid = task_id or new_id("tsk")
         trace = TraceStore(config.traces_dir, task_id=tid)
         rt = runtime or ToolRuntime(config, trace=trace)
-        pl = planner or LlmPlanner(config, allowed_tools=allowed_tools)
+        tools = set(allowed_tools) if allowed_tools is not None else None
+        if auto_yes:
+            # --yes cannot supply real answers; drop ask_user so the model must act.
+            from desktop_agent.tools.schema import ALL_TOOLS
+
+            tools = set(tools if tools is not None else ALL_TOOLS)
+            tools.discard("ask_user")
+        pl = planner or LlmPlanner(config, allowed_tools=tools)
         return cls(
             config=config,
             runtime=rt,
@@ -74,6 +115,7 @@ class Orchestrator:
             ask_user_fn=ask_user_fn,
             confirm_fn=confirm_fn,
             task_id=tid,
+            auto_yes=auto_yes,
         )
 
     def run(self, goal: str) -> TaskSummary:
@@ -148,7 +190,7 @@ class Orchestrator:
             )
 
         if call.name == "ask_user":
-            return self._ask_user(call)
+            return self._handle_ask_user(call)
 
         if call.name not in CONTROL_TOOLS:
             self.pending_call = call
@@ -174,6 +216,75 @@ class Orchestrator:
             return self._execute_and_verify(call)
 
         return self._fail(f"Unhandled control tool: {call.name}", code="LLM_INVALID_TOOL")
+
+    def _handle_ask_user(self, call: ToolCall) -> TaskSummary | None:
+        # Weak local models often ask "要不要启动记事本?" instead of launch_app.
+        # Redirect those questions into a real launch so the loop cannot stall.
+        args = call.arguments or {}
+        question = str(args.get("question") or args.get("message") or args.get("prompt") or "")
+        if not question and call.thought:
+            question = str(call.thought)
+        alias = infer_launch_app_from_question(question, goal=self.goal)
+        if not alias:
+            goal_alias = infer_launch_app_from_goal(self.goal)
+            # --yes, or any window/launch stall while the goal names an app.
+            stall_tokens = (
+                "窗口",
+                "启动",
+                "打开",
+                "launch",
+                "open",
+                "找不到",
+                "未找到",
+                "没找到",
+                "没有找到",
+                "手动",
+                "是否",
+                "要不要",
+                "需要我",
+            )
+            if goal_alias and (self.auto_yes or any(tok in question for tok in stall_tokens)):
+                alias = goal_alias
+        if alias:
+            self.runtime.trace.log(
+                "ask_user_redirect",
+                {"question": question, "launch_app": alias, "auto_yes": self.auto_yes},
+            )
+            redirected = ToolCall(
+                name="launch_app",
+                arguments={"app": alias},
+                thought=f"auto-launch after ask_user about {alias}",
+            )
+            return self._handle_planned_call(redirected)
+
+        self.ask_user_rounds += 1
+        # Count toward max_steps so ask loops cannot run forever.
+        self.steps += 1
+        # Two permission-style stalls is enough; then act from the goal or fail.
+        max_asks = 2
+        if self.ask_user_rounds >= max_asks:
+            alias = infer_launch_app_from_goal(self.goal)
+            if alias:
+                self.runtime.trace.log(
+                    "ask_user_redirect",
+                    {
+                        "question": question,
+                        "launch_app": alias,
+                        "reason": "max_ask_user_rounds",
+                    },
+                )
+                redirected = ToolCall(
+                    name="launch_app",
+                    arguments={"app": alias},
+                    thought=f"auto-launch after repeated ask_user ({alias})",
+                )
+                return self._handle_planned_call(redirected)
+            return self._fail(
+                "Too many ask_user rounds without a clear action",
+                code="ASK_USER_LOOP",
+            )
+
+        return self._ask_user(call)
 
     def _execute_and_verify(self, call: ToolCall) -> TaskSummary | None:
         self._transition(TaskState.EXECUTING)
@@ -220,8 +331,38 @@ class Orchestrator:
             self._transition(TaskState.CANCELLED)
             return self._fail("Cancelled by user", code="USER_CANCELLED", state=TaskState.CANCELLED)
 
+        if self._is_affirmative(answer) or self.auto_yes:
+            # Steer weak models away from re-asking; they must call an action tool next.
+            alias = infer_launch_app_from_question(question, goal=self.goal) or infer_launch_app_from_goal(
+                self.goal
+            )
+            hint = f"call launch_app app={alias}" if alias else "call the needed action tool"
+            self.history.append(
+                {
+                    "kind": "user",
+                    "content": (
+                        f"Approved. Do not ask_user again about this. {hint} immediately, "
+                        "then continue the goal."
+                    ),
+                    "question": question,
+                }
+            )
+
         self._transition(TaskState.PLANNING)
         return None
+
+    @staticmethod
+    def _is_affirmative(answer: str) -> bool:
+        text = str(answer or "").strip().lower()
+        if not text:
+            return False
+        if text in _AFFIRMATIVE:
+            return True
+        # Phrases like "是的，你自己打开记事本"
+        return any(
+            text.startswith(p) or p in text
+            for p in ("是的", "需要", "可以", "你自己", "打开", "启动", "yes", "launch", "open")
+        )
 
     def _confirm(self, reason: str) -> bool:
         self.runtime.trace.log("confirm_request", {"reason": reason})
@@ -263,4 +404,3 @@ class Orchestrator:
             task_id=self.task_id,
             error=self.last_error,
         )
-

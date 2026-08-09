@@ -102,6 +102,87 @@ def test_ask_user_then_done():
     assert any(h.get("kind") == "user" and h.get("content") == "张三" for h in orch.history)
 
 
+def test_auto_yes_removes_ask_user_from_planner_tools():
+    from desktop_agent.planner import LlmPlanner
+
+    cfg = _cfg()
+    rt = FakeRuntime()
+    orch = Orchestrator.create(
+        cfg,
+        runtime=rt,  # type: ignore[arg-type]
+        planner=None,
+        auto_yes=True,
+        ask_user_fn=lambda q, o: "yes",
+        confirm_fn=lambda r: True,
+    )
+    # Replace planner after create inspected tools — recreate with hook
+    # Orchestrator.create already built LlmPlanner; inspect its tool names.
+    assert isinstance(orch.planner, LlmPlanner)
+    names = {
+        str((t.get("function") or {}).get("name") or "")
+        for t in orch.planner.tools
+    }
+    assert "launch_app" in names
+    assert "ask_user" not in names
+
+
+def test_ask_user_launch_permission_redirects_to_launch_app():
+    asked: list[str] = []
+
+    def ask(q, options):
+        asked.append(q)
+        return "yes"
+
+    rt = FakeRuntime()
+    orch = Orchestrator(
+        config=_cfg(),
+        runtime=rt,  # type: ignore[arg-type]
+        planner=ScriptedPlanner(
+            [
+                ToolCall(
+                    name="ask_user",
+                    arguments={"question": "未找到记事本窗口。是否需要我尝试启动记事本？"},
+                ),
+                ToolCall(name="done", arguments={"summary": "launched", "success": True}),
+            ]
+        ),
+        ask_user_fn=ask,
+    )
+    summary = orch.run("打开记事本，输入 hello")
+    assert summary.success
+    assert asked == []
+    assert rt.calls and rt.calls[0][0] == "launch_app"
+    assert rt.calls[0][1].get("app") == "notepad"
+    assert any(e[0] == "ask_user_redirect" for e in rt.trace.events)
+
+
+def test_repeated_ask_user_eventually_launches_from_goal():
+    asked: list[str] = []
+
+    def ask(q, options):
+        asked.append(q)
+        return "随便"
+
+    rt = FakeRuntime()
+    cfg = _cfg()
+    cfg.runtime.max_steps = 20
+    orch = Orchestrator(
+        config=cfg,
+        runtime=rt,  # type: ignore[arg-type]
+        planner=ScriptedPlanner(
+            [
+                ToolCall(name="ask_user", arguments={"question": "接下来怎么办？"}),
+                ToolCall(name="ask_user", arguments={"question": "还是不确定？"}),
+                ToolCall(name="done", arguments={"summary": "done", "success": True}),
+            ]
+        ),
+        ask_user_fn=ask,
+    )
+    summary = orch.run("打开记事本输入 hello")
+    assert summary.success
+    assert any(name == "launch_app" for name, _ in rt.calls)
+
+
 def test_policy_confirm_denied():
     rt = FakeRuntime()
     orch = Orchestrator(

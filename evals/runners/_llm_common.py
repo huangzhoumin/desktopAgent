@@ -172,6 +172,7 @@ def run_llm_goal(
         confirm_fn=confirm,
         task_id=task_id,
         allowed_tools=allowed_tools,
+        auto_yes=auto_yes,
     )
     print(f"[goal]\n{goal}\n", flush=True)
     t0 = time.perf_counter()

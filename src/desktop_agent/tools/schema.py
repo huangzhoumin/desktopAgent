@@ -91,14 +91,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     _tool(
         "launch_app",
-        "Launch a whitelisted app by alias (notepad, excel, word, edge, chrome). Prefer this over asking the user.",
+        "Launch a whitelisted app by alias. Prefer this over ask_user whenever a window is missing. "
+        "Aliases: notepad (记事本), excel, word, edge, chrome.",
         {
             "type": "object",
             "required": ["app"],
             "properties": {
                 "app": {
                     "type": "string",
-                    "description": "App alias: notepad, excel, word, edge, chrome",
+                    "description": "App alias: notepad/记事本, excel, word, edge, chrome",
                 },
                 "args": {
                     "type": "array",
@@ -609,7 +610,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     _tool(
         "ask_user",
-        "Ask the user a question when information is missing, ambiguous, or confirmation is needed.",
+        "Ask only for a missing fact the user must supply (e.g. a filename choice, captcha, login). "
+        "NEVER ask whether to open/launch/start an app or whether a window exists — call launch_app instead.",
         {
             "type": "object",
             "required": ["question"],

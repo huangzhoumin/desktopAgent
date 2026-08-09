@@ -85,3 +85,8 @@ py -m desktop_agent run "打开记事本，输入 hello，然后告诉我完成�
 # LLM 记事本另存为：以磁盘文件为准（只弹出另存为不算通过）
 py -m desktop_agent eval-llm-t01
 ```
+
+## 使用例子
+```commandline
+.\.venv\Scripts\python.exe -m desktop_agent run "打开记事本，输入 hello，然后告诉我完成了" --yes
+```

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from desktop_agent.adapters.apps import infer_launch_app_from_goal
 from desktop_agent.config import AgentConfig
 from desktop_agent.errors import AgentError
 from desktop_agent.models import ToolCall
@@ -19,13 +20,15 @@ SYSTEM_PROMPT = """You are a Windows desktop UI agent planner.
 You solve the user's goal by calling tools one step at a time.
 
 Rules:
-1. Call exactly one tool per turn (or ask_user / done).
+1. Call exactly one tool per turn (or ask_user / done). Act by default — do not narrate or seek permission.
 2. Prefer semantic tools: browser_* for pages, excel_* / word_* for Office, UIA find+click/type for generic apps.
-3. If an app window is missing, call launch_app (notepad/excel/word/edge/chrome) instead of ask_user.
-4. After launch_app: list_windows -> focus_window -> type/click. For Notepad ONLY use notepad_type_text then notepad_save_as — never open Notepad Settings (设置), never click the gear, never press Ctrl+,. For Word prefer word_new then word_type_text then word_save.
+3. Missing app window → call launch_app yourself immediately. Aliases: notepad(=记事本), excel, word, edge, chrome.
+   找不到窗口就自己 launch_app，禁止 ask_user 询问“要不要启动/是否已打开/可否尝试”。
+   NEVER ask_user about launching or opening apps — just call launch_app.
+4. After launch_app notepad: call notepad_type_text (then notepad_save_as if saving). Do NOT open Notepad Settings (设置), never click the gear, never press Ctrl+,. Do not focus Excel/Word when the goal is Notepad. For Word prefer word_new then word_type_text then word_save.
 5. Never dump or request the full UIA tree; use get_ui_summary / find_elements with filters.
 6. After mutating the UI, verify with get_ui_summary, find_elements, excel_get_range, browser_snapshot, or verify_file as needed.
-7. Do not ask_user repeatedly for the same blocker — retry focus/find/type first; ask_user only when truly stuck.
+7. Do not ask_user repeatedly. If the user already answered yes / approved / said to do it yourself, call the action tool immediately. ask_user is only for missing facts (name, path choice, captcha) — never for "should I open X?".
 8. When the goal is complete (or impossible), call done with a short summary.
 9. Stay within the application whitelist; do not attempt high-risk system changes.
 10. element_id values are only valid from the latest observation — re-find if stale.
@@ -96,10 +99,23 @@ class LlmPlanner:
         system = SYSTEM_PROMPT
         if adapter_hints:
             system += f"\n\nAdapter hints:\n{adapter_hints}"
+        app = infer_launch_app_from_goal(goal)
+        if app:
+            system += (
+                f"\n\nGoal-specific: this task needs app `{app}`. "
+                f"If its window is missing, call launch_app with app={app} yourself — "
+                f"do not ask_user. 找不到就自己 launch_app app={app}。"
+            )
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system},
-            {"role": "user", "content": f"Goal:\n{goal}"},
+            {
+                "role": "user",
+                "content": (
+                    f"Goal:\n{goal}\n\n"
+                    "Start by calling tools. If you need an app window, launch_app first."
+                ),
+            },
         ]
 
         # Compact recent history (keep last N observations/actions).
@@ -114,7 +130,14 @@ class LlmPlanner:
                         f"-> {_short(item.get('result'))}"
                     )
                 elif kind == "user":
-                    lines.append(f"{i}. USER: {item.get('content')}")
+                    q = item.get("question")
+                    if q:
+                        lines.append(
+                            f"{i}. USER answered ask_user({_short(q, 120)}): {item.get('content')} "
+                            "(do not ask_user again — call launch_app / the next action tool now)"
+                        )
+                    else:
+                        lines.append(f"{i}. USER: {item.get('content')}")
                 elif kind == "error":
                     lines.append(f"{i}. ERROR: {_short(item.get('error'))}")
                 else:

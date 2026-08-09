@@ -115,6 +115,7 @@ def main() -> int:
         ask_user_fn=ask_user,
         confirm_fn=confirm,
         allowed_tools=NOTEPAD_TOOLS,
+        auto_yes=auto_yes,
     )
     t0 = time.perf_counter()
     summary = orch.run(goal)

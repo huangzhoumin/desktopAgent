@@ -30,18 +30,23 @@ class NotepadAdapter:
 
     def launch(self, *, move_primary: bool = True) -> ActionResult:
         before = self._hwnd_set()
-        subprocess.Popen(["notepad.exe"], close_fds=True)
+        # Prefer System32 Notepad over the WindowsApps execution alias stub.
+        exe = self._notepad_exe()
+        subprocess.Popen([exe], close_fds=False)
 
-        win = self._wait_new_window(before, timeout_s=4.0)
-        if win is None and before:
-            # Win11 may reuse one window as tabs — force a new window with Ctrl+N.
-            existing = self._control_by_hwnd(next(iter(before)))
-            if existing is not None:
-                self._activate(existing)
-                auto.SendKeys("{Ctrl}n", waitTime=0.15)
-                win = self._wait_new_window(before, timeout_s=4.0)
+        win = self._wait_new_window(before, timeout_s=5.0)
         if win is None:
-            win = self._wait_new_window(before, timeout_s=4.0)
+            # No new HWND — modern Notepad often reuses the existing process/window.
+            if before:
+                existing = self._control_by_hwnd(next(iter(before)))
+                if existing is not None:
+                    self._activate(existing)
+                    auto.SendKeys("{Ctrl}n", waitTime=0.2)
+                    win = self._wait_new_window(before, timeout_s=4.0)
+            if win is None:
+                # Fall back to any visible Notepad (session restore / same HWND).
+                wins = self._list_notepad_windows()
+                win = wins[-1] if wins else None
         if win is None:
             raise AdapterUnavailable("Failed to launch Notepad window")
 
@@ -54,6 +59,24 @@ class NotepadAdapter:
             win = self._control_by_hwnd(self._hwnd) or win
 
         self._activate(win)
+        self._ensure_editing(win)
+        # Session restore may reopen a named file — open a fresh tab for clean typing.
+        if not self._is_untitled(str(win.Name or "")):
+            try:
+                auto.SendKeys("{Ctrl}n", waitTime=0.2)
+                time.sleep(0.35)
+                refreshed = self._list_notepad_windows()
+                for candidate in reversed(refreshed):
+                    if self._is_untitled(str(candidate.Name or "")) and not self._is_settings_view(
+                        candidate
+                    ):
+                        win = candidate
+                        self._hwnd = int(win.NativeWindowHandle or 0)
+                        self._pid = int(win.ProcessId)
+                        self._activate(win)
+                        break
+            except Exception:
+                pass
         rect = window_rect(self._hwnd) if self._hwnd else None
         return ActionResult(
             action="notepad_launch",
@@ -65,8 +88,27 @@ class NotepadAdapter:
                 "bounds": rect,
                 "monitors": monitor_count(),
                 "primary": primary_screen_size(),
+                "exe": exe,
             },
         )
+
+    @staticmethod
+    def _notepad_exe() -> str:
+        import os
+        import shutil
+
+        for candidate in (
+            os.path.expandvars(r"%SystemRoot%\System32\notepad.exe"),
+            os.path.expandvars(r"%SystemRoot%\notepad.exe"),
+            "notepad.exe",
+        ):
+            p = Path(candidate)
+            if p.is_file():
+                return str(p)
+            found = shutil.which(candidate)
+            if found and "WindowsApps" not in found:
+                return found
+        return "notepad.exe"
 
     def _wait_new_window(self, before: set[int], timeout_s: float = 4.0):
         deadline = time.time() + timeout_s
