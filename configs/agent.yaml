@@ -1,0 +1,39 @@
+llm:
+  provider: openai_compatible
+  # Local Ollama (best among installed for tool-calling agents)
+  model: qwen3:8b
+  api_base: http://127.0.0.1:11434/v1
+  temperature: 0.1
+  max_tool_rounds: 40
+  timeout_s: 180
+  # Ollama ignores auth; any non-empty value works. Or set DESKTOP_AGENT_API_KEY.
+  api_key: ollama
+  # Disable Qwen3 thinking (maps to reasoning_effort=none on Ollama /v1)
+  think: false
+
+runtime:
+  step_timeout_ms: 30000
+  max_retries_per_step: 3
+  screenshot_every_step: true
+  max_steps: 40
+
+perception:
+  uia_max_nodes: 400
+  enable_ocr_fallback: false
+  enable_vlm_fallback: false
+  min_confidence_to_act: 0.75
+
+browser:
+  mode: attach  # attach (mode B) | controlled (mode A fallback)
+  cdp_host: 127.0.0.1
+  cdp_port: 9222
+  fallback_to_controlled: true
+
+safety:
+  confirm_coordinate_clicks: true
+  confirm_submit: true
+  mask_password_values: true
+  enforce_whitelist: true
+
+paths:
+  traces_dir: traces

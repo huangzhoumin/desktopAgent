@@ -1,0 +1,19 @@
+allowed_apps:
+  - process: msedge.exe
+    alias: edge
+  - process: chrome.exe
+    alias: chrome
+  - process: EXCEL.EXE
+    alias: excel
+  - process: WINWORD.EXE
+    alias: word
+  - process: notepad.exe
+    alias: notepad
+  - process: wps.exe
+    alias: wps
+  - process: et.exe
+    alias: wps_et
+  - process: wpp.exe
+    alias: wps_wpp
+  - process: wpscloud.exe
+    alias: wps_cloud

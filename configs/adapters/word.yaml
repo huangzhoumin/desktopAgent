@@ -1,0 +1,6 @@
+adapter: word
+processes: [WINWORD.EXE]
+prefer_tools:
+  - word_type_text
+  - word_save
+  - press_keys

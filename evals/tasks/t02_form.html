@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>DesktopAgent T02 Form</title>
+  <style>
+    body { font-family: Segoe UI, sans-serif; max-width: 520px; margin: 2rem auto; padding: 0 1rem; }
+    label { display: block; margin-top: 0.75rem; font-weight: 600; }
+    input, textarea { width: 100%; box-sizing: border-box; margin-top: 0.25rem; padding: 0.4rem; }
+    button { margin-top: 1rem; padding: 0.5rem 1rem; }
+    #preview { margin-top: 1.5rem; padding: 1rem; border: 1px solid #ccc; min-height: 4rem; white-space: pre-wrap; }
+    #preview.empty { color: #888; }
+  </style>
+</head>
+<body>
+  <h1>T02 Local Form (no external submit)</h1>
+  <form id="demo-form" onsubmit="return false;">
+    <label for="name">Name
+      <input id="name" name="name" type="text" autocomplete="off" />
+    </label>
+    <label for="email">Email
+      <input id="email" name="email" type="email" autocomplete="off" />
+    </label>
+    <label for="message">Message
+      <textarea id="message" name="message" rows="3"></textarea>
+    </label>
+    <button id="preview-btn" type="button">Preview</button>
+  </form>
+  <div id="preview" class="empty" data-testid="preview">Preview will appear here.</div>
+  <script>
+    document.getElementById("preview-btn").addEventListener("click", () => {
+      const name = document.getElementById("name").value;
+      const email = document.getElementById("email").value;
+      const message = document.getElementById("message").value;
+      const el = document.getElementById("preview");
+      el.classList.remove("empty");
+      el.textContent =
+        "Name: " + name + "\n" +
+        "Email: " + email + "\n" +
+        "Message: " + message;
+      el.dataset.ready = "1";
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+adapter: browser
+processes: [msedge.exe, chrome.exe]
+cdp_port: 9222
+prefer_tools:
+  - browser_navigate
+  - browser_fill
+  - browser_click
+  - get_ui_summary
+  - find_elements

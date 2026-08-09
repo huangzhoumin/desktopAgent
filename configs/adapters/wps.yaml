@@ -1,0 +1,11 @@
+adapter: wps
+processes: [wps.exe, et.exe, wpp.exe, wpscloud.exe]
+prefer_tools:
+  - wps_new
+  - wps_set_cell
+  - wps_get_cell
+  - wps_save
+  - wps_type_text
+  - wps_save_document
+  - press_keys
+  - get_ui_summary

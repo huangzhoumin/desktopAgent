@@ -1,0 +1,7 @@
+adapter: excel
+processes: [EXCEL.EXE]
+prefer_tools:
+  - excel_set_range
+  - excel_get_range
+  - excel_save
+  - press_keys
