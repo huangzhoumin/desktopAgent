@@ -119,7 +119,8 @@ class ToolRuntime:
             path = self.trace.screenshot_path("manual.png")
             return self.action.screenshot_foreground(str(path))
         if name == "browser_probe":
-            status = self.browser.probe()
+            auto_start = bool(kwargs.get("auto_start_isolated", True))
+            status = self.browser.probe(auto_start_isolated=auto_start)
             payload = {
                 "ok": status.ok,
                 "endpoint": status.endpoint,
@@ -127,10 +128,16 @@ class ToolRuntime:
                 "pages": status.pages,
                 "error": status.error,
                 "mode": status.mode,
+                "auto_started": status.auto_started,
                 "configured_mode": self.config.browser.mode,
                 "fallback_to_controlled": self.config.browser.fallback_to_controlled,
             }
-            if not status.ok and self.config.browser.fallback_to_controlled:
+            if status.auto_started and status.ok:
+                payload["hint"] = (
+                    "CDP was down; auto-started isolated debug Chrome "
+                    "(same profile as scripts/start-chrome-debug-isolated.bat)."
+                )
+            elif not status.ok and self.config.browser.fallback_to_controlled:
                 payload["hint"] = (
                     "CDP attach unavailable; browser_* tools will launch controlled browser (mode A)."
                 )

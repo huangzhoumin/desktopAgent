@@ -81,13 +81,36 @@ Write-Host "Executable : $exe"
 Write-Host "User data  : $profileDir"
 Write-Host "Next       : desktop-agent doctor   /   desktop-agent browser-probe"
 
+# Chrome 136+ requires a non-default --user-data-dir for CDP.
+# Do not pass --remote-debugging-address; localhost binding is the default.
 $launchArgs = @(
     "--remote-debugging-port=$Port",
-    "--remote-debugging-address=127.0.0.1",
     "--user-data-dir=$profileDir",
     "--no-first-run",
-    "--no-default-browser-check"
+    "--no-default-browser-check",
+    "--new-window",
+    "about:blank"
 )
 
 Start-Process -FilePath $exe -ArgumentList $launchArgs | Out-Null
-Write-Host "Launched."
+Write-Host "Launched. Waiting for CDP..."
+
+$ready = $false
+for ($i = 0; $i -lt 20; $i++) {
+    try {
+        $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/json/version" -UseBasicParsing -TimeoutSec 1
+        if ($resp.StatusCode -eq 200) {
+            $ready = $true
+            break
+        }
+    } catch {
+        Start-Sleep -Seconds 1
+    }
+}
+
+if ($ready) {
+    Write-Host "CDP is ready: http://127.0.0.1:$Port"
+} else {
+    Write-Error "Browser started but CDP is not reachable on port $Port. Close all $Browser windows and retry."
+    exit 2
+}
