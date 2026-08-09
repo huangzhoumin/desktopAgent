@@ -5,7 +5,7 @@
 > 目标场景：浏览器（Chrome / Edge）、办公软件（Microsoft Word/Excel + WPS + 记事本等）  
 > 平台：Windows 10 / 11  
 > 已确认：浏览器 MVP 用 Attach 日常浏览器（模式 B）；MS Office 与 WPS 均支持；MVP 交互为 CLI  
-> 实现进度：M3 进行中（M2 Agent Loop 已接入；模式 A 降级 / 对话框适配 / T03–T08 评测与 dashboard 已落地）
+> 实现进度：M3 进行中（M2 Agent Loop 已接入；模式 A 降级 / 对话框适配 / T03–T12 评测与 dashboard 已落地；OCR/VLM 视觉兜底与 `replay` 已接入）
 
 ---
 
@@ -1088,6 +1088,8 @@ desktop-agent doctor
 | T08 | 混合 | 从 Excel 读一个值填到网页表单 |
 | T09 | WPS 表格 | 写入单元格并保存 |
 | T10 | WPS 文字 | 写入一段话并保存 |
+| T11 | Excel（Microsoft） | 脏工作簿 Alt+F4 → 关闭保存提示 → More options 本地另存为 |
+| T12 | Edge | 触发下载后走 UIA 下载栏 / Save As（相对 T07 Playwright 拦截的兜底路径） |
 
 ### 15.2 指标
 
@@ -1188,10 +1190,10 @@ desktop-agent doctor
 1. ~~评审关键决策（浏览器连接 / Office+WPS / CLI）~~ ✅  
 2. ~~冻结 Tool Schema v1 / doctor / UIA+Notepad / Office+WPS / Attach+模式A / LLM Orchestrator~~ ✅  
 3. 用 LLM e2e 稳定 T01–T05（本地 Ollama / 云端）  
-4. 对话框覆盖更多壳层场景（Office 提示框、浏览器下载栏 UIA）  
+4. ~~对话框覆盖更多壳层场景（Office 提示框、浏览器下载栏 UIA）~~ ✅（`eval-t11` / `eval-t12`）  
 5. M4：托盘驻留 / 暂停继续 / App Profile / VLM 兜底  
 
-当前 CLI 评测入口：`desktop-agent eval-t01` … `eval-t10`，汇总：`desktop-agent eval-dashboard --suite`。
+当前 CLI 评测入口：`desktop-agent eval-t01` … `eval-t12`，汇总：`desktop-agent eval-dashboard --suite`。
 
 ---
 

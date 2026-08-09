@@ -39,7 +39,9 @@ class Orchestrator:
         "for Notepad use notepad_type_text + notepad_save_as (closed-loop; waits for file); "
         "dialog_save_as only when a native Save As dialog is already visible; "
         "after any save, call verify_file before done — a visible 另存为 dialog alone is not success; "
-        "UIA get_ui_summary/find_elements/click/type_text for generic apps."
+        "UIA get_ui_summary/find_elements/click/type_text for generic apps; "
+        "if UIA cannot find a control, use ocr_find then click its element_id; "
+        "vlm_locate only when OCR also fails and VLM fallback is enabled."
     )
 
     def __post_init__(self) -> None:
@@ -147,7 +149,16 @@ class Orchestrator:
         if call.name not in CONTROL_TOOLS:
             self.pending_call = call
             self._transition(TaskState.POLICY_CHECK)
-            decision = self.safety.check_tool(call) if self.safety else PolicyDecision(allow=True)
+            element = None
+            if call.name == "click":
+                target = (call.arguments or {}).get("target")
+                if isinstance(target, str):
+                    element = self.runtime.perception.get_element(target)
+            decision = (
+                self.safety.check_tool(call, element=element)
+                if self.safety
+                else PolicyDecision(allow=True)
+            )
             self.runtime.trace.log("policy", decision.to_dict())
             if decision.reject or not decision.allow:
                 return self._fail(decision.reason or "Policy rejected", code="PERMISSION_DENIED")

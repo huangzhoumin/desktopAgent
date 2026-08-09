@@ -27,6 +27,7 @@ DEFAULT_SUITE = {
     "T09": "t09_wps_sheets.py",
     "T10": "t10_wps_writer.py",
     "T11": "t11_office_prompt.py",
+    "T12": "t12_download_bar.py",
 }
 
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import uiautomation as auto
 
-from desktop_agent.common.win32_window import force_foreground
+from desktop_agent.common.win32_window import force_foreground, get_foreground_hwnd
 from desktop_agent.errors import ActionRejected, ElementNotFound
 from desktop_agent.models import ActionResult
 
@@ -94,6 +94,22 @@ SAVE_PROMPT_BUTTON_NAMES = (
     "Yes",
     "&Yes",
 )
+DOWNLOAD_BAR_SAVE_NAMES = (
+    "保存",
+    "Save",
+    "另存为",
+    "Save as",
+    "Save As",
+    "另存为(&A)",
+)
+DOWNLOAD_BAR_OPEN_NAMES = ("打开", "Open", "打开文件", "Open file")
+DOWNLOAD_BAR_SHOW_NAMES = (
+    "显示在文件夹中",
+    "Show in folder",
+    "在文件夹中显示",
+    "Open folder",
+)
+DOWNLOAD_BAR_CANCEL_NAMES = ("取消", "Cancel", "关闭", "Close")
 
 
 class FileDialogHelper:
@@ -476,6 +492,182 @@ class FileDialogHelper:
         return self.click_button(
             names=names, title_contains=title_contains, timeout_s=timeout_s
         )
+
+    def browser_download_bar_action(
+        self,
+        *,
+        action: str = "save",
+        path: str | Path | None = None,
+        timeout_s: float = 6.0,
+        open_if_needed: bool = True,
+    ) -> ActionResult:
+        """Interact with Edge/Chrome download shelf / Save As via UIA.
+
+        action: save | open | show | cancel
+        When ``path`` is set for save, fill a Save As dialog (already open, or
+        opened via shelf click / common shortcuts when ``open_if_needed``).
+        """
+        action_l = (action or "save").strip().lower()
+        name_map = {
+            "save": DOWNLOAD_BAR_SAVE_NAMES,
+            "另存为": DOWNLOAD_BAR_SAVE_NAMES,
+            "save as": DOWNLOAD_BAR_SAVE_NAMES,
+            "open": DOWNLOAD_BAR_OPEN_NAMES,
+            "show": DOWNLOAD_BAR_SHOW_NAMES,
+            "cancel": DOWNLOAD_BAR_CANCEL_NAMES,
+        }
+        names = name_map.get(action_l, (action,))
+        deadline = time.time() + max(1.0, float(timeout_s))
+        clicked = None
+        while time.time() < deadline:
+            try:
+                root = auto.GetRootControl()
+                for top in root.GetChildren():
+                    title = str(getattr(top, "Name", "") or "")
+                    if not title:
+                        continue
+                    # Prefer browser / download-looking hosts, but still scan others.
+                    for name in names:
+                        btn = self._find_named_button(top, name, depth=22)
+                        if btn is not None:
+                            self._invoke_or_click(btn)
+                            clicked = name
+                            break
+                    if clicked:
+                        break
+            except Exception:
+                pass
+            if clicked:
+                break
+            time.sleep(0.15)
+
+        if path and action_l in {"save", "另存为", "save as"}:
+            owner, owner_hwnd, owner_pid = self._foreground_owner_window()
+            # Prefer an already-open dialog; optionally open via shortcuts on the
+            # focused app (Win11 Notepad/Edge Save As is often a child window).
+            already = self.wait_dialog(
+                owner=owner,
+                owner_hwnd=owner_hwnd,
+                owner_pid=owner_pid,
+                timeout_s=0.6,
+            )
+            open_strategies = None
+            if already is None and not clicked and open_if_needed:
+                open_strategies = [
+                    lambda: self._send_keys_to_owner(owner, "{Ctrl}{Shift}s"),
+                    lambda: self._send_keys_to_owner(owner, "{Ctrl}s"),
+                    lambda: self._open_save_as_via_alt_file(owner),
+                    lambda: self._open_save_as_via_menu(owner),
+                ]
+            try:
+                result = self.save_as(
+                    path,
+                    owner=owner,
+                    owner_hwnd=owner_hwnd,
+                    owner_pid=owner_pid,
+                    open_strategies=open_strategies,
+                    timeout_s=max(3.0, float(timeout_s)),
+                    wait_file_s=6.0,
+                )
+                detail = dict(result.detail or {})
+                detail.update(
+                    {
+                        "button": clicked,
+                        "action": action_l,
+                        "via": "save_as" if not clicked else "shelf_then_save_as",
+                    }
+                )
+                return ActionResult(action="browser_download_bar", ok=True, detail=detail)
+            except Exception as e:
+                if clicked:
+                    return ActionResult(
+                        action="browser_download_bar",
+                        ok=False,
+                        error={"code": "ACTION_REJECTED", "message": str(e)},
+                        detail={"button": clicked, "path": str(path)},
+                    )
+                raise
+
+        if not clicked:
+            raise ActionRejected(f"Download bar action not found: {action_l} / {names}")
+        return ActionResult(
+            action="browser_download_bar",
+            ok=True,
+            detail={"button": clicked, "action": action_l},
+        )
+
+    def _foreground_owner_window(self):
+        """Best-effort top-level UIA control for the focused Win32 window."""
+        hwnd = get_foreground_hwnd()
+        if not hwnd:
+            return None, None, None
+        owner = None
+        try:
+            owner = auto.ControlFromHandle(int(hwnd))
+        except Exception:
+            owner = None
+        if owner is None:
+            return None, int(hwnd), None
+        title = str(getattr(owner, "Name", "") or "")
+        # If Save As itself is focused, keep pid filter but no owner tree root.
+        if any(k in title for k in ("另存为", "Save As")):
+            pid = None
+            try:
+                pid = int(owner.ProcessId)
+            except Exception:
+                pass
+            return None, None, pid
+        pid = None
+        try:
+            pid = int(owner.ProcessId)
+        except Exception:
+            pass
+        return owner, int(hwnd), pid
+
+    def _send_keys_to_owner(self, owner, keys: str) -> None:
+        if owner is not None:
+            try:
+                hwnd = int(owner.NativeWindowHandle or 0)
+                if hwnd:
+                    force_foreground(hwnd)
+                    time.sleep(0.08)
+            except Exception:
+                pass
+        auto.SendKeys(keys, waitTime=0.15)
+
+    def _open_save_as_via_alt_file(self, owner=None) -> None:
+        if owner is not None:
+            try:
+                hwnd = int(owner.NativeWindowHandle or 0)
+                if hwnd:
+                    force_foreground(hwnd)
+                    time.sleep(0.08)
+            except Exception:
+                pass
+        auto.SendKeys("{Alt}", waitTime=0.08)
+        time.sleep(0.12)
+        auto.SendKeys("f", waitTime=0.08)
+        time.sleep(0.25)
+        auto.SendKeys("a", waitTime=0.08)
+
+    def _open_save_as_via_menu(self, owner=None) -> None:
+        if owner is None:
+            return
+        try:
+            hwnd = int(owner.NativeWindowHandle or 0)
+            if hwnd:
+                force_foreground(hwnd)
+                time.sleep(0.08)
+        except Exception:
+            pass
+        for name in ("另存为...", "另存为", "Save As", "Save as"):
+            try:
+                item = owner.MenuItemControl(searchDepth=18, Name=name)
+                if item.Exists(0.25, 0.05):
+                    self._invoke_or_click(item)
+                    return
+            except Exception:
+                continue
 
     def save_office_prompt_local(
         self,

@@ -128,6 +128,39 @@ def doctor(
     except Exception as e:
         rows.append(("Traces", "FAIL", str(e)))
 
+    # OCR / VLM fallback
+    ocr = rt.ocr.probe()
+    if cfg.perception.enable_ocr_fallback:
+        rows.append(
+            (
+                "OCR fallback",
+                "OK" if ocr.get("ok") else "WARN",
+                (
+                    f"engine={ocr.get('engine')}"
+                    if ocr.get("ok")
+                    else f"{ocr.get('error')}; pip install 'desktop-agent[vision]'"
+                ),
+            )
+        )
+    else:
+        rows.append(("OCR fallback", "OFF", "perception.enable_ocr_fallback=false"))
+
+    vlm = rt.vlm.probe()
+    if cfg.perception.enable_vlm_fallback:
+        rows.append(
+            (
+                "VLM fallback",
+                "OK" if vlm.get("ok") else "WARN",
+                (
+                    f"model={vlm.get('model')} @ {vlm.get('api_base')}"
+                    if vlm.get("ok")
+                    else str(vlm.get("error") or "unavailable")
+                ),
+            )
+        )
+    else:
+        rows.append(("VLM fallback", "OFF", "perception.enable_vlm_fallback=false"))
+
     table = Table(title="desktop-agent doctor")
     table.add_column("Check")
     table.add_column("Status")
@@ -463,6 +496,20 @@ def eval_t11(
     _run_eval_script("t11_office_prompt.py", args)
 
 
+@app.command("eval-t12")
+def eval_t12(
+    html: Optional[Path] = typer.Option(None, "--html"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Local save path"),
+) -> None:
+    """Run T12 browser download-bar / Save As UIA verification (no LLM)."""
+    args: list[str] = []
+    if html:
+        args.extend(["--html", str(html)])
+    if out:
+        args.extend(["--out", str(out)])
+    _run_eval_script("t12_download_bar.py", args)
+
+
 @app.command("eval-dashboard")
 def eval_dashboard(
     suite: bool = typer.Option(False, "--suite", help="Run T01-T08 then aggregate"),
@@ -485,6 +532,78 @@ def eval_dashboard(
     if md:
         args.extend(["--md", str(md)])
     _run_eval_script("dashboard.py", args)
+
+
+@app.command()
+def replay(
+    trace: Path = typer.Argument(..., help="Trace dir or events.jsonl path"),
+    event_type: Optional[str] = typer.Option(
+        None, "--type", help="Filter by event type, e.g. tool_call"
+    ),
+    limit: int = typer.Option(0, "--limit", help="Max events to show (0 = all)"),
+    as_json: bool = typer.Option(False, "--json", help="Print machine-readable summary + events"),
+    summary_only: bool = typer.Option(False, "--summary", help="Only print summary"),
+) -> None:
+    """Read-only replay of a local task trace (events.jsonl + screenshots)."""
+    from desktop_agent.memory.replay import TraceReplay
+
+    try:
+        rp = TraceReplay.load(trace)
+    except FileNotFoundError as e:
+        rprint(f"[red]{e}[/]")
+        raise typer.Exit(code=1) from e
+
+    summary = rp.summary()
+    events = rp.filter(event_type=event_type, limit=limit or None)
+
+    if as_json:
+        _print_json(
+            {
+                "summary": summary,
+                "events": [e.to_dict() for e in events],
+            }
+        )
+        return
+
+    title = f"replay {summary.get('task_id')}"
+    goal = summary.get("goal") or "(no goal recorded)"
+    success = summary.get("success")
+    status = "unknown" if success is None else ("ok" if success else "failed")
+    rprint(
+        Panel(
+            f"dir: {summary['trace_dir']}\n"
+            f"status: {status}\n"
+            f"events: {summary['event_count']}  errors: {summary['error_count']}\n"
+            f"screenshots: {len(summary.get('screenshots') or [])}\n"
+            f"goal: {goal}",
+            title=title,
+        )
+    )
+
+    if summary.get("tool_counts"):
+        tools = Table(title="tool_call counts")
+        tools.add_column("tool")
+        tools.add_column("count")
+        for name, count in sorted(summary["tool_counts"].items(), key=lambda x: (-x[1], x[0])):
+            tools.add_row(name, str(count))
+        rprint(tools)
+
+    if summary_only:
+        return
+
+    table = Table(title="events")
+    table.add_column("#", justify="right")
+    table.add_column("ts")
+    table.add_column("type")
+    table.add_column("detail")
+    for ev in events:
+        table.add_row(str(ev.line), ev.ts, ev.type, rp.short_line(ev))
+    rprint(table)
+
+    if summary.get("screenshots"):
+        rprint("[dim]screenshots:[/]")
+        for p in summary["screenshots"]:
+            rprint(f"  {p}")
 
 
 @app.command()

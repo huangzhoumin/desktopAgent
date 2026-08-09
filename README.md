@@ -24,11 +24,12 @@ py -m desktop_agent browser-probe
 
 ## 当前能力（M3）
 
-- CLI：`doctor` / `run` / `list-windows` / `sense` / `click` / `type-text` / `press-keys`
+- CLI：`doctor` / `run` / `list-windows` / `sense` / `click` / `type-text` / `press-keys` / `replay`
 - LLM Orchestrator 状态机 + tool-calling Planner（`launch_app` / `ask_user` / `done`）
 - UIA 感知与基础动作；`wait_for`（含 `file_exists` / `file_contains`）；通用 `dialog_save_as`
+- 视觉兜底：`ocr_find`（RapidOCR / Windows.Media.Ocr）与 `vlm_locate`（多模态 LLM）；`find_elements` 在 UIA 未命中时可自动 OCR
 - 记事本闭环：`notepad_type_text` / `notepad_save_as`；保存后可用 `verify_file` 验落盘
-- 应用白名单、高危确认门闩与本地 Trace
+- 应用白名单、高危确认门闩与本地 Trace；`replay` 只读回放 `traces/<task_id>`
 - 浏览器 CDP Attach（模式 B）+ 失败自动降级受控浏览器（模式 A）
 - Excel / Word COM；WPS 表格/文字读写与保存
 - 无 LLM 闭环评测 + 汇总看板：
@@ -43,6 +44,8 @@ py -m desktop_agent browser-probe
   - T08 Excel→网页表单：`py -m desktop_agent eval-t08 --force-controlled`
   - T09 WPS 表格：`py -m desktop_agent eval-t09`
   - T10 WPS 文字：`py -m desktop_agent eval-t10`
+  - T11 Office 关闭保存提示（More options → 本地另存为）：`py -m desktop_agent eval-t11`
+  - T12 浏览器下载栏 / Save As（UIA）：`py -m desktop_agent eval-t12`
   - 汇总：`py -m desktop_agent eval-dashboard`（或 `--suite` 跑 T01–T08）
 
 ### LLM 配置
@@ -50,6 +53,23 @@ py -m desktop_agent browser-probe
 默认已指向本机 Ollama：`qwen3:8b` @ `http://127.0.0.1:11434/v1`（本地已装模型里最适合 tool-calling；无需真 API Key，配置里 `api_key: ollama` 即可）。
 
 若改用云端兼容接口，改 `llm.model` / `llm.api_base`，并设置 `DESKTOP_AGENT_API_KEY`。
+
+### OCR / VLM 视觉兜底
+
+`configs/agent.yaml`：
+
+- `perception.enable_ocr_fallback: true`（默认开）— 需要可选依赖：`py -m pip install -e ".[vision]"`
+- `perception.enable_vlm_fallback: false`（默认关）— 打开后使用多模态模型；可设 `perception.vlm_model`（如 `llava` / `qwen2.5vl`）
+
+OCR/VLM 命中的 `element_id` 走坐标点击，且默认需要确认（`--yes` 可自动过）。
+
+### Trace 回放
+
+```powershell
+py -m desktop_agent replay traces\t12_1786251032
+py -m desktop_agent replay traces\t12_1786251032 --summary
+py -m desktop_agent replay traces\t12_1786251032 --type tool_call --json
+```
 
 ```powershell
 # 确保 ollama serve 已运行

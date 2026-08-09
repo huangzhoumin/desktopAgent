@@ -30,6 +30,7 @@ Rules:
 9. Stay within the application whitelist; do not attempt high-risk system changes.
 10. element_id values are only valid from the latest observation — re-find if stale.
 11. Seeing a Save As dialog is NOT success. For any save/download goal, call notepad_save_as / dialog_save_as / excel_save (etc.) and then verify_file (or wait_for file_exists/file_contains) before done. Do not call done if the file is missing.
+12. Vision fallback: if find_elements returns nothing useful, call ocr_find (then click element_id). Use vlm_locate only after OCR fails / is unavailable. Prefer UIA/DOM/COM over vision.
 """
 
 

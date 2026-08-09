@@ -5,5 +5,11 @@ prefer_tools:
   - browser_navigate
   - browser_fill
   - browser_click
+  - browser_download
+  - browser_download_bar
   - get_ui_summary
   - find_elements
+notes: >
+  Prefer browser_download (Playwright intercept) when attach/controlled allows it.
+  If a download shelf / Ask where to save appears, use browser_download_bar
+  action=save with path=<local file> (UIA Save As fill).

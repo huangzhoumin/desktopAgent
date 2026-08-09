@@ -56,6 +56,16 @@ class RuntimeConfig:
 
 
 @dataclass
+class PerceptionConfig:
+    uia_max_nodes: int = 400
+    enable_ocr_fallback: bool = False
+    enable_vlm_fallback: bool = False
+    min_confidence_to_act: float = 0.75
+    ocr_engine: str = "auto"  # auto | rapidocr | windows
+    vlm_model: str = ""  # optional multimodal model override
+
+
+@dataclass
 class AgentConfig:
     raw: dict[str, Any] = field(default_factory=dict)
     traces_dir: Path = field(default_factory=lambda: ROOT / "traces")
@@ -63,6 +73,7 @@ class AgentConfig:
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     llm: LlmConfig = field(default_factory=LlmConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    perception: PerceptionConfig = field(default_factory=PerceptionConfig)
     uia_max_nodes: int = 400
     screenshot_every_step: bool = True
     whitelist: dict[str, str] = field(default_factory=dict)  # process_lower -> alias
@@ -70,6 +81,10 @@ class AgentConfig:
     @property
     def cdp_endpoint(self) -> str:
         return f"http://{self.browser.cdp_host}:{self.browser.cdp_port}"
+
+    @property
+    def min_confidence_to_act(self) -> float:
+        return self.perception.min_confidence_to_act
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -152,6 +167,14 @@ def load_config(
             max_retries_per_step=int(runtime_raw.get("max_retries_per_step", 3)),
             screenshot_every_step=bool(runtime_raw.get("screenshot_every_step", True)),
             max_steps=int(runtime_raw.get("max_steps", max_rounds)),
+        ),
+        perception=PerceptionConfig(
+            uia_max_nodes=int(perception.get("uia_max_nodes", 400)),
+            enable_ocr_fallback=bool(perception.get("enable_ocr_fallback", False)),
+            enable_vlm_fallback=bool(perception.get("enable_vlm_fallback", False)),
+            min_confidence_to_act=float(perception.get("min_confidence_to_act", 0.75)),
+            ocr_engine=str(perception.get("ocr_engine", "auto")),
+            vlm_model=str(perception.get("vlm_model", "") or ""),
         ),
         uia_max_nodes=int(perception.get("uia_max_nodes", 400)),
         screenshot_every_step=bool(runtime_raw.get("screenshot_every_step", True)),

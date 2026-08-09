@@ -50,8 +50,35 @@ class ActionExecutor:
 
         ctrl = self.perception.get_control(target)
         el = self.perception.get_element(target)
-        if ctrl is None or el is None:
+        if el is None:
             raise ElementNotFound(f"Unknown element_id: {target}")
+        # OCR/VLM synthetic elements have bounds but no UIA control.
+        if ctrl is None:
+            if el.bounds is None:
+                raise ElementNotFound(f"Element has no clickable bounds: {target}")
+            x, y = el.bounds.center
+            try:
+                if click_count >= 2:
+                    auto.Click(x, y, askAdmin=False)
+                    auto.Click(x, y, askAdmin=False)
+                else:
+                    auto.Click(x, y, askAdmin=False)
+                return ActionResult(
+                    action="click",
+                    ok=True,
+                    target=target,
+                    latency_ms=int((time.perf_counter() - t0) * 1000),
+                    detail={
+                        "name": el.name,
+                        "role": el.role,
+                        "source": el.source,
+                        "via": "bounds",
+                        "xy": [x, y],
+                        "confidence": el.confidence,
+                    },
+                )
+            except Exception as e:
+                raise ActionRejected(str(e)) from e
         try:
             if button == "left" and click_count == 1:
                 try:
@@ -69,7 +96,7 @@ class ActionExecutor:
                 ok=True,
                 target=target,
                 latency_ms=int((time.perf_counter() - t0) * 1000),
-                detail={"name": el.name, "role": el.role},
+                detail={"name": el.name, "role": el.role, "source": el.source},
             )
         except Exception as e:
             raise ElementStale(str(e)) from e

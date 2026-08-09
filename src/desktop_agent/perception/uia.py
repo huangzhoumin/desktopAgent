@@ -209,6 +209,13 @@ class UiaPerception:
     def get_window_control(self, window_id: str):
         return self._runtime_refs.get(window_id)
 
+    def register_synthetic(self, element: UIElement) -> UIElement:
+        """Register OCR/VLM (or other non-UIA) elements for click-by-id."""
+        self._element_index[element.element_id] = element
+        # No native control handle; ActionExecutor falls back to bounds center.
+        self._runtime_refs.pop(element.element_id, None)
+        return element
+
     def _walk(
         self,
         ctrl: auto.Control,

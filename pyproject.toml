@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.4"]
+vision = ["rapidocr-onnxruntime>=1.3.0"]
 
 [project.scripts]
 desktop-agent = "desktop_agent.cli.main:app"

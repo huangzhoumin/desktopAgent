@@ -19,9 +19,12 @@ runtime:
 
 perception:
   uia_max_nodes: 400
-  enable_ocr_fallback: false
+  enable_ocr_fallback: true
   enable_vlm_fallback: false
   min_confidence_to_act: 0.75
+  ocr_engine: auto  # auto | rapidocr | windows
+  # Optional multimodal model for vlm_locate (defaults to llm.model)
+  vlm_model: ""
 
 browser:
   mode: attach  # attach (mode B) | controlled (mode A)

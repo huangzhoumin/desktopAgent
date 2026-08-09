@@ -16,8 +16,11 @@ from desktop_agent.common.dialogs import FileDialogHelper
 from desktop_agent.config import AgentConfig
 from desktop_agent.errors import AgentError, PermissionDenied, TimeoutError_
 from desktop_agent.memory.trace import TraceStore
-from desktop_agent.models import ActionResult
+from desktop_agent.models import UIElement, new_id
+from desktop_agent.perception.capture import capture_screen
+from desktop_agent.perception.ocr import OcrEngine
 from desktop_agent.perception.uia import UiaPerception
+from desktop_agent.perception.vlm import VlmLocator
 from desktop_agent.safety.policy import SafetyGuard
 
 
@@ -34,6 +37,8 @@ class ToolRuntime:
         self.wps = WpsAdapter()
         self.notepad = NotepadAdapter()
         self.dialogs = FileDialogHelper()
+        self.ocr = OcrEngine(config.perception.ocr_engine)
+        self.vlm = VlmLocator(config.llm, model=config.perception.vlm_model or None)
         aliases = set(config.whitelist.values()) | set(config.whitelist.keys())
         # Normalize keys like notepad.exe -> notepad
         aliases |= {a.lower().removesuffix(".exe") for a in aliases}
@@ -125,13 +130,64 @@ class ToolRuntime:
             )
         if name == "find_elements":
             query = kwargs.get("query") or {}
+            top_k = int(kwargs.get("top_k", 5))
             els = self.perception.find_elements(
                 text=query.get("text"),
                 role=query.get("role"),
                 automation_id=query.get("automation_id"),
-                top_k=int(kwargs.get("top_k", 5)),
+                top_k=top_k,
             )
-            return {"ok": True, "elements": [e.to_summary() for e in els]}
+            fallback = None
+            if (
+                not els
+                and self.config.perception.enable_ocr_fallback
+                and query.get("text")
+            ):
+                ocr_result = self._ocr_find(
+                    text=str(query.get("text")),
+                    top_k=top_k,
+                    scope="foreground",
+                )
+                if ocr_result.get("ok"):
+                    els = [
+                        self.perception.get_element(e["element_id"])
+                        for e in (ocr_result.get("elements") or [])
+                        if self.perception.get_element(e["element_id"]) is not None
+                    ]
+                    fallback = "ocr"
+            return {
+                "ok": True,
+                "elements": [e.to_summary() for e in els if e is not None],
+                "fallback": fallback,
+            }
+        if name == "ocr_find":
+            if not self.config.perception.enable_ocr_fallback:
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "PERMISSION_DENIED",
+                        "message": "OCR fallback disabled (set perception.enable_ocr_fallback: true)",
+                    },
+                }
+            return self._ocr_find(
+                text=kwargs.get("text"),
+                top_k=int(kwargs.get("top_k", 8)),
+                scope=str(kwargs.get("scope") or "foreground"),
+            )
+        if name == "vlm_locate":
+            if not self.config.perception.enable_vlm_fallback:
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "PERMISSION_DENIED",
+                        "message": "VLM fallback disabled (set perception.enable_vlm_fallback: true)",
+                    },
+                }
+            return self._vlm_locate(
+                query=str(kwargs["query"]),
+                top_k=int(kwargs.get("top_k", 3)),
+                scope=str(kwargs.get("scope") or "foreground"),
+            )
         if name == "click":
             self._assert_fg_allowed()
             target = kwargs["target"]
@@ -151,8 +207,20 @@ class ToolRuntime:
             self._assert_fg_allowed()
             return self.action.press_keys(list(kwargs["keys"]))
         if name == "screenshot":
+            scope = str(kwargs.get("scope") or "foreground")
             path = self.trace.screenshot_path("manual.png")
-            return self.action.screenshot_foreground(str(path))
+            cap = self._capture(path, scope=scope)
+            return {
+                "action": "screenshot",
+                "ok": True,
+                "detail": {
+                    "path": cap.path,
+                    "scope": cap.scope,
+                    "origin": list(cap.origin),
+                    "size": [cap.width, cap.height],
+                    **cap.detail,
+                },
+            }
         if name == "browser_probe":
             auto_start = bool(kwargs.get("auto_start_isolated", True))
             status = self.browser.probe(auto_start_isolated=auto_start)
@@ -188,6 +256,13 @@ class ToolRuntime:
                 kwargs["locator"],
                 kwargs["path"],
                 timeout_ms=int(kwargs.get("timeout_ms") or 15000),
+            )
+        if name == "browser_download_bar":
+            return self.dialogs.browser_download_bar_action(
+                action=str(kwargs.get("action") or "save"),
+                path=kwargs.get("path"),
+                timeout_s=float(kwargs.get("timeout_s") or 6.0),
+                open_if_needed=bool(kwargs.get("open_if_needed", True)),
             )
         if name == "browser_snapshot":
             return {
@@ -412,3 +487,140 @@ class ToolRuntime:
             return
         if not self.safety.is_allowed_process(fg.process):
             raise PermissionDenied(f"Foreground app not allowed: {fg.process}")
+
+    def _capture(self, path: str | Path, *, scope: str = "foreground"):
+        bounds = None
+        if (scope or "foreground").lower() == "foreground":
+            fg = self.perception.get_foreground_window()
+            if fg and fg.bounds:
+                bounds = (fg.bounds.x, fg.bounds.y, fg.bounds.w, fg.bounds.h)
+        return capture_screen(path, scope=scope, bounds=bounds)
+
+    def _ocr_find(
+        self,
+        *,
+        text: str | None = None,
+        top_k: int = 8,
+        scope: str = "foreground",
+    ) -> dict[str, Any]:
+        probe = self.ocr.probe()
+        if not probe.get("ok"):
+            return {
+                "ok": False,
+                "error": {
+                    "code": "AGENT_ERROR",
+                    "message": probe.get("error") or "OCR unavailable",
+                },
+                "hint": "pip install 'desktop-agent[vision]' (rapidocr-onnxruntime)",
+            }
+        path = self.trace.screenshot_path(f"ocr_{new_id('img')}.png")
+        cap = self._capture(path, scope=scope)
+        try:
+            boxes = self.ocr.recognize(cap.path, origin=cap.origin)
+        except Exception as e:
+            return {"ok": False, "error": {"code": "AGENT_ERROR", "message": str(e)}}
+
+        needle = (text or "").strip().lower()
+        scored: list[tuple[float, UIElement]] = []
+        fg = self.perception.get_foreground_window()
+        app = fg.app if fg else "unknown"
+        window_id = fg.window_id if fg else ""
+        for box in boxes:
+            if needle:
+                low = box.text.lower()
+                if needle == low:
+                    score = 4.0 + box.confidence
+                elif needle in low:
+                    score = 2.0 + box.confidence
+                else:
+                    continue
+            else:
+                score = box.confidence
+            el = UIElement(
+                element_id=new_id("el"),
+                source="ocr",
+                app=app,
+                window_id=window_id,
+                role="Text",
+                name=box.text,
+                states=["visible"],
+                bounds=box.bounds,
+                path=f"OCR/{box.text[:40]}",
+                actions=["click"],
+                confidence=box.confidence,
+                raw_ref={"engine": self.ocr.engine_name, "screenshot": cap.path},
+            )
+            self.perception.register_synthetic(el)
+            scored.append((score, el))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        picked = [el for _, el in scored[:top_k]]
+        return {
+            "ok": True,
+            "engine": self.ocr.engine_name,
+            "screenshot_path": cap.path,
+            "scope": cap.scope,
+            "element_count": len(picked),
+            "elements": [e.to_summary() for e in picked],
+        }
+
+    def _vlm_locate(
+        self,
+        *,
+        query: str,
+        top_k: int = 3,
+        scope: str = "foreground",
+    ) -> dict[str, Any]:
+        probe = self.vlm.probe()
+        if not probe.get("ok"):
+            return {
+                "ok": False,
+                "error": {
+                    "code": "VLM_ERROR",
+                    "message": probe.get("error") or "VLM unavailable",
+                },
+            }
+        path = self.trace.screenshot_path(f"vlm_{new_id('img')}.png")
+        cap = self._capture(path, scope=scope)
+        try:
+            matches = self.vlm.locate(cap.path, query, origin=cap.origin, top_k=top_k)
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": {"code": getattr(e, "code", "VLM_ERROR"), "message": str(e)},
+            }
+
+        fg = self.perception.get_foreground_window()
+        app = fg.app if fg else "unknown"
+        window_id = fg.window_id if fg else ""
+        elements: list[UIElement] = []
+        for match in matches:
+            el = UIElement(
+                element_id=new_id("el"),
+                source="vlm",
+                app=app,
+                window_id=window_id,
+                role="Target",
+                name=match.label,
+                states=["visible"],
+                bounds=match.bounds,
+                path=f"VLM/{match.label[:40]}",
+                actions=["click"],
+                confidence=match.confidence,
+                raw_ref={
+                    "model": self.vlm.model,
+                    "screenshot": cap.path,
+                    "notes": match.notes,
+                },
+            )
+            self.perception.register_synthetic(el)
+            elements.append(el)
+        return {
+            "ok": True,
+            "model": self.vlm.model,
+            "screenshot_path": cap.path,
+            "scope": cap.scope,
+            "query": query,
+            "element_count": len(elements),
+            "elements": [e.to_summary() for e in elements],
+            "notes": matches[0].notes if matches else "",
+        }

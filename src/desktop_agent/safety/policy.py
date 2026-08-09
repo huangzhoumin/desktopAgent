@@ -5,7 +5,7 @@ from typing import Any
 
 from desktop_agent.config import AgentConfig
 from desktop_agent.errors import PermissionDenied
-from desktop_agent.models import ToolCall, WindowInfo
+from desktop_agent.models import ToolCall, UIElement, WindowInfo
 
 _SUBMIT_HINTS = (
     "submit",
@@ -61,7 +61,7 @@ class SafetyGuard:
             return f"*** ({len(value)} chars)"
         return value
 
-    def check_tool(self, call: ToolCall) -> PolicyDecision:
+    def check_tool(self, call: ToolCall, *, element: UIElement | None = None) -> PolicyDecision:
         """Policy gate before executing a runtime tool."""
         name = call.name
         args = call.arguments or {}
@@ -74,6 +74,18 @@ class SafetyGuard:
                         allow=True,
                         require_confirm=True,
                         reason="Coordinate click requires confirmation",
+                    )
+            if element is not None and element.source in {"ocr", "vlm"}:
+                threshold = self.config.min_confidence_to_act
+                if self.config.safety.confirm_coordinate_clicks or element.confidence < threshold:
+                    return PolicyDecision(
+                        allow=True,
+                        require_confirm=True,
+                        reason=(
+                            f"{element.source.upper()} click "
+                            f"(confidence={element.confidence:.2f}, "
+                            f"threshold={threshold:.2f}) requires confirmation"
+                        ),
                     )
 
         if name in {"browser_click", "click"} and self.config.safety.confirm_submit:

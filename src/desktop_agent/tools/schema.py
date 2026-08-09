@@ -16,6 +16,8 @@ RUNTIME_TOOLS = frozenset(
         "get_ui_summary",
         "find_elements",
         "screenshot",
+        "ocr_find",
+        "vlm_locate",
         "click",
         "type_text",
         "press_keys",
@@ -30,6 +32,7 @@ RUNTIME_TOOLS = frozenset(
         "browser_fill",
         "browser_click",
         "browser_download",
+        "browser_download_bar",
         "browser_snapshot",
         "excel_new",
         "excel_open",
@@ -149,13 +152,67 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     ),
     _tool(
+        "ocr_find",
+        "OCR fallback: screenshot + OCR, return text boxes as clickable elements (source=ocr). "
+        "Use when UIA find_elements fails on custom-drawn UI.",
+        {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "Optional text filter (substring, case-insensitive)",
+                },
+                "top_k": {"type": "integer", "default": 8},
+                "scope": {
+                    "type": "string",
+                    "enum": ["foreground", "full"],
+                    "default": "foreground",
+                },
+            },
+        },
+    ),
+    _tool(
+        "vlm_locate",
+        "VLM fallback: screenshot + vision model to locate a UI target by natural language. "
+        "Requires perception.enable_vlm_fallback and a multimodal model.",
+        {
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to find, e.g. 'Save button' or '下载'",
+                },
+                "top_k": {"type": "integer", "default": 3},
+                "scope": {
+                    "type": "string",
+                    "enum": ["foreground", "full"],
+                    "default": "foreground",
+                },
+            },
+        },
+    ),
+    _tool(
         "click",
-        "Click a UI element by element_id from find_elements / get_ui_summary.",
+        "Click a UI element by element_id (UIA/OCR/VLM) or screen coordinates {x,y}.",
         {
             "type": "object",
             "required": ["target"],
             "properties": {
-                "target": {"type": "string", "description": "element_id"},
+                "target": {
+                    "description": "element_id string, or {x,y} screen coordinates",
+                    "anyOf": [
+                        {"type": "string"},
+                        {
+                            "type": "object",
+                            "required": ["x", "y"],
+                            "properties": {
+                                "x": {"type": "integer"},
+                                "y": {"type": "integer"},
+                            },
+                        },
+                    ],
+                },
                 "button": {
                     "type": "string",
                     "enum": ["left", "right", "middle"],
@@ -350,6 +407,31 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
                 "path": {"type": "string", "description": "Destination file path"},
                 "timeout_ms": {"type": "integer", "default": 15000},
+            },
+        },
+    ),
+    _tool(
+        "browser_download_bar",
+        "Handle Edge/Chrome download shelf via UIA (save/open/show/cancel). "
+        "For action=save with path, fills Save As (shelf click or shortcuts when open_if_needed).",
+        {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "save|open|show|cancel",
+                    "default": "save",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Local destination when saving (fills Save As)",
+                },
+                "timeout_s": {"type": "number", "default": 6.0},
+                "open_if_needed": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "If no shelf/Save As yet, try Ctrl+Shift+S / Ctrl+S / Alt+F+A",
+                },
             },
         },
     ),
