@@ -26,6 +26,7 @@ DEFAULT_SUITE = {
     "T08": "t08_excel_to_form.py",
     "T09": "t09_wps_sheets.py",
     "T10": "t10_wps_writer.py",
+    "T11": "t11_office_prompt.py",
 }
 
 

@@ -446,6 +446,23 @@ def eval_t10(
     _run_eval_script("t10_wps_writer.py", args)
 
 
+@app.command("eval-t11")
+def eval_t11(
+    out: Optional[Path] = typer.Option(None, "--out", help="Local xlsx save path"),
+    keep_open: bool = typer.Option(False, "--keep-open"),
+    discard: bool = typer.Option(False, "--discard", help="Click Don't Save instead"),
+) -> None:
+    """Run T11 Office save-prompt: More options -> local Save As (no LLM)."""
+    args: list[str] = []
+    if out:
+        args.extend(["--out", str(out)])
+    if keep_open:
+        args.append("--keep-open")
+    if discard:
+        args.append("--discard")
+    _run_eval_script("t11_office_prompt.py", args)
+
+
 @app.command("eval-dashboard")
 def eval_dashboard(
     suite: bool = typer.Option(False, "--suite", help="Run T01-T08 then aggregate"),

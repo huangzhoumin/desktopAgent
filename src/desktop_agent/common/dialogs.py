@@ -1,4 +1,4 @@
-"""Generic Windows common-file-dialog helpers (Save As / Open)."""
+"""Generic Windows common-file-dialog helpers (Save As / Open) + shell prompts."""
 
 from __future__ import annotations
 
@@ -10,6 +10,90 @@ import uiautomation as auto
 from desktop_agent.common.win32_window import force_foreground
 from desktop_agent.errors import ActionRejected, ElementNotFound
 from desktop_agent.models import ActionResult
+
+# Office / shell message-box button aliases
+AFFIRMATIVE_BUTTONS = (
+    "是(&Y)",
+    "是(Y)",
+    "是",
+    "Yes",
+    "&Yes",
+    "确定",
+    "OK",
+    "保存(&S)",
+    "保存(S)",
+    "保存",
+    "Save",
+    "&Save",
+    "重试",
+    "Retry",
+    "打开",
+    "Open",
+)
+NEGATIVE_BUTTONS = (
+    "不保存(&N)",
+    "不保存(N)",
+    "不保存",
+    "Don't Save",
+    "Don\u2019t Save",
+    "&Don't Save",
+    "否(&N)",
+    "否(N)",
+    "否",
+    "No",
+    "&No",
+    "取消",
+    "Cancel",
+)
+OFFICE_PROMPT_TITLE_HINTS = (
+    "Microsoft Excel",
+    "Microsoft Word",
+    "Excel",
+    "Word",
+    "WPS",
+    "提示",
+    "Warning",
+    "Confirm",
+    "确认",
+    "另存为",
+    "Save As",
+    "保存对此文件所做的更改",
+    "Save changes to",
+    "要保存",
+)
+MORE_OPTIONS_NAMES = (
+    "更多选项…",  # Excel uses unicode ellipsis
+    "更多选项...",
+    "更多选项",
+    "More options…",
+    "More options...",
+    "More options",
+)
+DISCARD_BUTTON_NAMES = (
+    "不保存(&N)",
+    "不保存(N)",
+    "不保存",
+    "Don't Save",
+    "Don\u2019t Save",
+    "&Don't Save",
+    "否(&N)",
+    "否(N)",
+    "否",
+    "No",
+    "&No",
+)
+SAVE_PROMPT_BUTTON_NAMES = (
+    "保存(&S)",
+    "保存(S)",
+    "保存",
+    "Save",
+    "&Save",
+    "是(&Y)",
+    "是(Y)",
+    "是",
+    "Yes",
+    "&Yes",
+)
 
 
 class FileDialogHelper:
@@ -26,6 +110,7 @@ class FileDialogHelper:
         "&Save",
         "Save",
     )
+    FILENAME_LABELS = ("文件名:", "文件名：", "File name:", "File name")
 
     def wait_dialog(
         self,
@@ -295,6 +380,315 @@ class FileDialogHelper:
             except Exception:
                 pass
             time.sleep(0.1)
+
+    def click_button(
+        self,
+        *,
+        names: tuple[str, ...] | list[str] | None = None,
+        title_contains: str | None = None,
+        timeout_s: float = 3.0,
+        optional: bool = False,
+    ) -> ActionResult:
+        """Click a shell / Office message-box or dialog button by name."""
+        names = tuple(names or AFFIRMATIVE_BUTTONS)
+        deadline = time.time() + timeout_s
+        last_seen = ""
+        while time.time() < deadline:
+            hosts = self._iter_prompt_hosts(title_contains=title_contains)
+            for host in hosts:
+                try:
+                    last_seen = str(getattr(host, "Name", "") or "")
+                except Exception:
+                    last_seen = ""
+                for name in names:
+                    btn = self._find_named_button(host, name, depth=18)
+                    if btn is not None:
+                        self._invoke_or_click(btn)
+                        return ActionResult(
+                            action="dialog_click_button",
+                            ok=True,
+                            detail={"button": name, "dialog_title": last_seen},
+                        )
+            # Global fallback (some prompts are top-level without useful parent).
+            for name in names:
+                try:
+                    btn = auto.ButtonControl(searchDepth=14, Name=name)
+                    if btn.Exists(0.15, 0.05):
+                        self._invoke_or_click(btn)
+                        return ActionResult(
+                            action="dialog_click_button",
+                            ok=True,
+                            detail={"button": name, "dialog_title": last_seen or None},
+                        )
+                except Exception:
+                    continue
+            time.sleep(0.12)
+        if optional:
+            return ActionResult(
+                action="dialog_click_button",
+                ok=True,
+                detail={"skipped": True, "reason": "no matching button"},
+            )
+        raise ActionRejected(
+            f"Dialog button not found among {names}"
+            + (f" (last dialog={last_seen!r})" if last_seen else "")
+        )
+
+    def find_prompt_dialog(self, title_contains: str | None = None):
+        """Find a likely Office / shell save prompt (top-level or nested in app)."""
+        for host in self._iter_prompt_hosts(title_contains=title_contains):
+            if self._host_has_save_prompt(host):
+                return host
+        return None
+
+    def handle_office_prompt(
+        self,
+        *,
+        action: str = "yes",
+        timeout_s: float = 3.0,
+        title_contains: str | None = None,
+        path: str | Path | None = None,
+    ) -> ActionResult:
+        """Dismiss common Office prompts (save/overwrite/protected view).
+
+        When action is save/yes and ``path`` is set, prefer the modern Excel
+        "More options..." route into a classic Save As filled with that local path
+        (avoids OneDrive default location).
+        """
+        action_l = (action or "yes").strip().lower()
+        if (
+            path
+            and action_l in {"yes", "y", "ok", "save", "affirm", "是", "确定", "保存"}
+        ):
+            return self.save_office_prompt_local(
+                path,
+                timeout_s=timeout_s,
+                title_contains=title_contains,
+            )
+        if action_l in {"yes", "y", "ok", "save", "affirm", "是", "确定", "保存"}:
+            names = AFFIRMATIVE_BUTTONS
+        elif action_l in {"no", "n", "discard", "don't save", "dont_save", "否", "不保存"}:
+            names = NEGATIVE_BUTTONS
+        elif action_l in {"cancel", "取消"}:
+            names = ("取消", "Cancel")
+        else:
+            names = (action,)
+        return self.click_button(
+            names=names, title_contains=title_contains, timeout_s=timeout_s
+        )
+
+    def save_office_prompt_local(
+        self,
+        path: str | Path,
+        *,
+        timeout_s: float = 8.0,
+        title_contains: str | None = None,
+    ) -> ActionResult:
+        """Save from Office close/save prompt to a local path via More options.
+
+        Excel's modern flyout defaults to OneDrive. Clicking More options opens a
+        classic common-file dialog *embedded in the Excel window* (no separate
+        top-level 另存为 title), so we fill that host directly.
+        """
+        out = Path(path).expanduser().resolve()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if out.exists():
+            try:
+                out.unlink()
+            except OSError:
+                pass
+
+        deadline = time.time() + max(3.0, float(timeout_s))
+        opened_more = False
+        prompt_host = None
+        while time.time() < deadline:
+            host = self.find_prompt_dialog(title_contains=title_contains)
+            if host is None and title_contains:
+                host = self.find_prompt_dialog()
+            if host is not None:
+                prompt_host = host
+                for name in MORE_OPTIONS_NAMES:
+                    btn = self._find_named_button(host, name, depth=20)
+                    if btn is not None:
+                        self._invoke_or_click(btn)
+                        opened_more = True
+                        break
+                if opened_more:
+                    break
+                link = self._find_named_control(host, MORE_OPTIONS_NAMES, depth=20)
+                if link is not None:
+                    self._invoke_or_click(link)
+                    opened_more = True
+                    break
+            time.sleep(0.15)
+
+        if not opened_more:
+            raise ActionRejected(
+                "Office prompt 'More options' not found; cannot force local Save As"
+            )
+
+        # Embedded Save As lives under the Excel/Word window, not as a titled dialog.
+        embed = None
+        embed_deadline = time.time() + max(4.0, float(timeout_s))
+        while time.time() < embed_deadline:
+            embed = self._find_embedded_save_as_host(prefer=prompt_host)
+            if embed is not None:
+                break
+            # Top-level common dialog fallback (some builds detach it).
+            embed = self.wait_dialog(timeout_s=0.35)
+            if embed is not None:
+                break
+            time.sleep(0.12)
+
+        if embed is None:
+            raise ActionRejected(
+                "Classic Save As (embedded) did not appear after More options"
+            )
+
+        self._complete_save(embed, out, wait_file_s=8.0)
+        return ActionResult(
+            action="dialog_click_button",
+            ok=True,
+            detail={
+                "via": "more_options_embedded_save_as",
+                "path": str(out),
+                "bytes": out.stat().st_size if out.exists() else 0,
+            },
+        )
+
+    def _find_embedded_save_as_host(self, prefer=None):
+        """Find Excel/Word window that currently hosts a classic Save As UI."""
+        candidates = []
+        if prefer is not None:
+            candidates.append(prefer)
+        try:
+            root = auto.GetRootControl()
+            for top in root.GetChildren():
+                title = str(getattr(top, "Name", "") or "")
+                if (" - Excel" in title) or (" - Word" in title) or ("另存为" in title):
+                    candidates.append(top)
+        except Exception:
+            pass
+
+        for host in candidates:
+            if self._looks_like_save_as_host(host):
+                return host
+        return None
+
+    def _looks_like_save_as_host(self, host) -> bool:
+        # Must expose a filename field labeled 文件名 / File name.
+        has_filename = False
+        for label in self.FILENAME_LABELS:
+            try:
+                edit = host.EditControl(searchDepth=20, Name=label)
+                if edit.Exists(0.05, 0.02):
+                    has_filename = True
+                    break
+            except Exception:
+                pass
+            try:
+                combo = host.ComboBoxControl(searchDepth=20, Name=label)
+                if combo.Exists(0.05, 0.02):
+                    has_filename = True
+                    break
+            except Exception:
+                pass
+        if not has_filename:
+            return False
+        # And a Save confirm button (not just ribbon Save).
+        for name in ("保存(S)", "保存(&S)", "保存", "Save", "&Save"):
+            btn = self._find_named_button(host, name, depth=16)
+            if btn is not None:
+                return True
+        return False
+
+    def _iter_prompt_hosts(self, title_contains: str | None = None):
+        """Yield top-level and nested hosts that may contain an Office save prompt."""
+        hosts = []
+        try:
+            root = auto.GetRootControl()
+            for top in root.GetChildren():
+                try:
+                    title = str(getattr(top, "Name", "") or "")
+                    if not title:
+                        continue
+                    if title_contains and title_contains.lower() not in title.lower():
+                        # Still allow nested search under main Excel/Word when filter is Excel.
+                        main_app = (" - Excel" in title) or title.endswith(" - Word")
+                        if not (
+                            main_app
+                            and title_contains
+                            and title_contains.lower()
+                            in ("excel", "word", "microsoft excel", "microsoft word")
+                        ):
+                            # Modern prompt title itself.
+                            if not any(
+                                h.lower() in title.lower()
+                                for h in OFFICE_PROMPT_TITLE_HINTS
+                            ):
+                                continue
+                    hint_ok = any(
+                        h.lower() in title.lower() for h in OFFICE_PROMPT_TITLE_HINTS
+                    ) or bool(title_contains and title_contains.lower() in title.lower())
+                    main_app = (" - Excel" in title) or (" - Word" in title)
+                    if hint_ok and not main_app:
+                        hosts.append(top)
+                    if main_app:
+                        # Modern "Save changes?" UI is often nested under the app window.
+                        hosts.append(top)
+                        try:
+                            for child in top.GetChildren():
+                                hosts.append(child)
+                        except Exception:
+                            pass
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return hosts
+
+    def _host_has_save_prompt(self, host) -> bool:
+        has_discard = any(
+            self._find_named_button(host, name, depth=14) is not None
+            for name in DISCARD_BUTTON_NAMES
+        )
+        has_save = any(
+            self._find_named_button(host, name, depth=14) is not None
+            for name in SAVE_PROMPT_BUTTON_NAMES
+        )
+        return has_discard and has_save
+
+    def _find_named_button(self, host, name: str, *, depth: int = 14):
+        try:
+            btn = host.ButtonControl(searchDepth=depth, Name=name)
+            if btn.Exists(0.05, 0.02):
+                return btn
+        except Exception:
+            pass
+        # Partial match for localized accelerator variants.
+        try:
+            for btn in self._iter_buttons(host, limit=60):
+                label = str(getattr(btn, "Name", "") or "")
+                if label == name or name in label:
+                    return btn
+        except Exception:
+            pass
+        return None
+
+    def _find_named_control(self, host, names: tuple[str, ...] | list[str], *, depth: int = 14):
+        for name in names:
+            for factory in (
+                lambda n=name: host.HyperlinkControl(searchDepth=depth, Name=n),
+                lambda n=name: host.TextControl(searchDepth=depth, Name=n),
+                lambda n=name: host.ButtonControl(searchDepth=depth, Name=n),
+            ):
+                try:
+                    ctrl = factory()
+                    if ctrl.Exists(0.05, 0.02):
+                        return ctrl
+                except Exception:
+                    continue
+        return None
 
     def _set_filename(self, edit, full: str) -> None:
         try:

@@ -98,6 +98,20 @@ class ToolRuntime:
                 timeout_s=float(kwargs.get("timeout_s") or 5.0),
                 wait_file_s=float(kwargs.get("wait_file_s") or 6.0),
             )
+        if name == "dialog_click_button":
+            names = kwargs.get("names")
+            if names:
+                return self.dialogs.click_button(
+                    names=list(names),
+                    title_contains=kwargs.get("title_contains"),
+                    timeout_s=float(kwargs.get("timeout_s") or 3.0),
+                )
+            return self.dialogs.handle_office_prompt(
+                action=str(kwargs.get("action") or "yes"),
+                timeout_s=float(kwargs.get("timeout_s") or 3.0),
+                title_contains=kwargs.get("title_contains"),
+                path=kwargs.get("path"),
+            )
         if name == "verify_file":
             return self._verify_file(
                 kwargs["path"],
