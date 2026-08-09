@@ -22,13 +22,14 @@ Rules:
 1. Call exactly one tool per turn (or ask_user / done).
 2. Prefer semantic tools: browser_* for pages, excel_* / word_* for Office, UIA find+click/type for generic apps.
 3. If an app window is missing, call launch_app (notepad/excel/word/edge/chrome) instead of ask_user.
-4. After launch_app: list_windows -> focus_window -> type_text/click. For Notepad, type_text without target is OK once focused.
+4. After launch_app: list_windows -> focus_window -> type/click. For Notepad prefer notepad_type_text then notepad_save_as.
 5. Never dump or request the full UIA tree; use get_ui_summary / find_elements with filters.
-6. After mutating the UI, verify with get_ui_summary, find_elements, excel_get_range, or browser_snapshot as needed.
+6. After mutating the UI, verify with get_ui_summary, find_elements, excel_get_range, browser_snapshot, or verify_file as needed.
 7. Do not ask_user repeatedly for the same blocker — retry focus/find/type first; ask_user only when truly stuck.
 8. When the goal is complete (or impossible), call done with a short summary.
 9. Stay within the application whitelist; do not attempt high-risk system changes.
 10. element_id values are only valid from the latest observation — re-find if stale.
+11. Seeing a Save As dialog is NOT success. For any save/download goal, call notepad_save_as / dialog_save_as / excel_save (etc.) and then verify_file (or wait_for file_exists/file_contains) before done. Do not call done if the file is missing.
 """
 
 

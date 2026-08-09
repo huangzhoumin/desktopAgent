@@ -9,6 +9,7 @@ from desktop_agent.action.executor import ActionExecutor
 from desktop_agent.adapters.apps import AppLauncher
 from desktop_agent.adapters.browser import BrowserAdapter
 from desktop_agent.adapters.excel import ExcelAdapter
+from desktop_agent.adapters.notepad import NotepadAdapter
 from desktop_agent.adapters.word import WordAdapter
 from desktop_agent.adapters.wps import WpsAdapter
 from desktop_agent.common.dialogs import FileDialogHelper
@@ -31,6 +32,7 @@ class ToolRuntime:
         self.excel = ExcelAdapter()
         self.word = WordAdapter()
         self.wps = WpsAdapter()
+        self.notepad = NotepadAdapter()
         self.dialogs = FileDialogHelper()
         aliases = set(config.whitelist.values()) | set(config.whitelist.keys())
         # Normalize keys like notepad.exe -> notepad
@@ -78,10 +80,29 @@ class ToolRuntime:
             return self.action.focus_window(kwargs["window_id"])
         if name == "launch_app":
             return self.apps.launch(kwargs["app"], args=kwargs.get("args"))
+        if name == "notepad_type_text":
+            return self.notepad.type_text(
+                kwargs["text"],
+                clear=bool(kwargs.get("clear", True)),
+            )
+        if name == "notepad_save_as":
+            # Closed-loop: open Save As, fill path, confirm, require file on disk.
+            return self.notepad.save_as(kwargs["path"])
         if name == "dialog_save_as":
+            owner, owner_hwnd, owner_pid = self._foreground_owner()
             return self.dialogs.save_as(
                 kwargs["path"],
+                owner=owner,
+                owner_hwnd=owner_hwnd,
+                owner_pid=owner_pid,
                 timeout_s=float(kwargs.get("timeout_s") or 5.0),
+                wait_file_s=float(kwargs.get("wait_file_s") or 6.0),
+            )
+        if name == "verify_file":
+            return self._verify_file(
+                kwargs["path"],
+                contains=kwargs.get("contains"),
+                min_bytes=int(kwargs.get("min_bytes") or 0),
             )
         if name == "get_ui_summary":
             return self._ui_summary(
@@ -235,12 +256,112 @@ class ToolRuntime:
                         "condition": ctype,
                         "title": fg.title,
                     }
+            elif ctype == "file_exists":
+                path = Path(str(value or query.get("path") or ""))
+                if path and path.exists():
+                    return {
+                        "ok": True,
+                        "condition": ctype,
+                        "path": str(path),
+                        "bytes": path.stat().st_size,
+                    }
+            elif ctype == "file_contains":
+                path = Path(str(query.get("path") or ""))
+                needle = str(value or query.get("contains") or "")
+                if path and path.exists() and needle:
+                    try:
+                        text = path.read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        text = ""
+                    if needle in text:
+                        return {
+                            "ok": True,
+                            "condition": ctype,
+                            "path": str(path),
+                            "bytes": path.stat().st_size,
+                        }
             else:
                 raise AgentError(f"Unsupported wait condition: {ctype}", code="LLM_INVALID_TOOL")
 
             if time.monotonic() >= deadline:
                 raise TimeoutError_(f"wait_for timed out: {ctype}")
             time.sleep(0.25)
+
+    def _verify_file(
+        self,
+        path: str | Path,
+        *,
+        contains: str | None = None,
+        min_bytes: int = 0,
+    ) -> dict[str, Any]:
+        p = Path(path)
+        if not p.exists():
+            return {
+                "ok": False,
+                "error": {
+                    "code": "ACTION_REJECTED",
+                    "message": f"File not found: {p}",
+                },
+                "path": str(p),
+            }
+        size = p.stat().st_size
+        preview = ""
+        if contains is not None or min_bytes >= 0:
+            try:
+                preview = p.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                preview = ""
+        if size < min_bytes:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "ACTION_REJECTED",
+                    "message": f"File too small: {size} < {min_bytes}",
+                },
+                "path": str(p),
+                "bytes": size,
+            }
+        if contains is not None and contains not in preview:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "ACTION_REJECTED",
+                    "message": f"File does not contain expected text: {contains!r}",
+                },
+                "path": str(p),
+                "bytes": size,
+                "preview": preview[:200],
+            }
+        return {
+            "ok": True,
+            "path": str(p),
+            "bytes": size,
+            "preview": preview[:200],
+        }
+
+    def _foreground_owner(self):
+        """Best-effort owner window for native file dialogs (LLM dialog_save_as)."""
+        try:
+            import uiautomation as auto
+
+            fg = self.perception.get_foreground_window()
+            if fg is None:
+                return None, None, None
+            hwnd = getattr(fg, "handle", None)
+            pid = getattr(fg, "pid", None)
+            title = str(getattr(fg, "title", "") or "")
+            # If Save As is already focused, do not treat it as the owner tree root.
+            if any(k in title for k in ("另存为", "Save As")):
+                return None, None, int(pid) if pid else None
+            owner = None
+            if hwnd:
+                try:
+                    owner = auto.ControlFromHandle(int(hwnd))
+                except Exception:
+                    owner = None
+            return owner, int(hwnd) if hwnd else None, int(pid) if pid else None
+        except Exception:
+            return None, None, None
 
     def _ui_summary(self, max_elements: int = 80, roles: list[str] | None = None) -> dict[str, Any]:
         obs = self.perception.sense_foreground(roles=roles)

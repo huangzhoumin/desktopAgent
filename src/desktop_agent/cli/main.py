@@ -293,6 +293,24 @@ def eval_t01(
     _run_eval_script("t01_notepad.py", args)
 
 
+@app.command("eval-llm-t01")
+def eval_llm_t01(
+    out: Optional[Path] = typer.Option(None, "--out", help="Output txt path"),
+    marker: Optional[str] = typer.Option(None, "--marker", help="Exact text that must be saved"),
+    max_steps: int = typer.Option(20, "--max-steps"),
+    no_yes: bool = typer.Option(False, "--no-yes", help="Disable auto-confirm"),
+) -> None:
+    """Run LLM e2e T01 Notepad Save As; pass only if the file exists with marker text."""
+    args: list[str] = ["--max-steps", str(max_steps)]
+    if out:
+        args.extend(["--out", str(out)])
+    if marker:
+        args.extend(["--marker", marker])
+    if no_yes:
+        args.append("--no-yes")
+    _run_eval_script("llm_t01_notepad.py", args)
+
+
 @app.command("eval-t02")
 def eval_t02(
     html: Optional[Path] = typer.Option(None, "--html", help="Local HTML form path"),
