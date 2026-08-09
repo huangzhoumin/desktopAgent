@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from desktop_agent.action.executor import ActionExecutor
+from desktop_agent.adapters.apps import AppLauncher
 from desktop_agent.adapters.browser import BrowserAdapter
 from desktop_agent.adapters.excel import ExcelAdapter
 from desktop_agent.adapters.word import WordAdapter
 from desktop_agent.adapters.wps import WpsAdapter
+from desktop_agent.common.dialogs import FileDialogHelper
 from desktop_agent.config import AgentConfig
 from desktop_agent.errors import AgentError, PermissionDenied, TimeoutError_
 from desktop_agent.memory.trace import TraceStore
@@ -29,6 +31,11 @@ class ToolRuntime:
         self.excel = ExcelAdapter()
         self.word = WordAdapter()
         self.wps = WpsAdapter()
+        self.dialogs = FileDialogHelper()
+        aliases = set(config.whitelist.values()) | set(config.whitelist.keys())
+        # Normalize keys like notepad.exe -> notepad
+        aliases |= {a.lower().removesuffix(".exe") for a in aliases}
+        self.apps = AppLauncher(allowed_aliases=aliases)
         self._last_obs = None
 
     def call(self, name: str, **kwargs) -> dict[str, Any]:
@@ -69,6 +76,13 @@ class ToolRuntime:
             if info:
                 self.safety.assert_window_allowed(info)
             return self.action.focus_window(kwargs["window_id"])
+        if name == "launch_app":
+            return self.apps.launch(kwargs["app"], args=kwargs.get("args"))
+        if name == "dialog_save_as":
+            return self.dialogs.save_as(
+                kwargs["path"],
+                timeout_s=float(kwargs.get("timeout_s") or 5.0),
+            )
         if name == "get_ui_summary":
             return self._ui_summary(
                 max_elements=int(kwargs.get("max_elements", 80)),
@@ -106,21 +120,39 @@ class ToolRuntime:
             return self.action.screenshot_foreground(str(path))
         if name == "browser_probe":
             status = self.browser.probe()
-            return {
+            payload = {
                 "ok": status.ok,
                 "endpoint": status.endpoint,
                 "version": status.version,
                 "pages": status.pages,
                 "error": status.error,
+                "mode": status.mode,
+                "configured_mode": self.config.browser.mode,
+                "fallback_to_controlled": self.config.browser.fallback_to_controlled,
             }
+            if not status.ok and self.config.browser.fallback_to_controlled:
+                payload["hint"] = (
+                    "CDP attach unavailable; browser_* tools will launch controlled browser (mode A)."
+                )
+            return payload
         if name == "browser_navigate":
             return self.browser.navigate(kwargs["url"], kwargs.get("wait_until", "domcontentloaded"))
         if name == "browser_fill":
             return self.browser.fill(kwargs["locator"], kwargs["value"])
         if name == "browser_click":
             return self.browser.click(kwargs["locator"])
+        if name == "browser_download":
+            return self.browser.download(
+                kwargs["locator"],
+                kwargs["path"],
+                timeout_ms=int(kwargs.get("timeout_ms") or 15000),
+            )
         if name == "browser_snapshot":
-            return {"ok": True, "elements": self.browser.snapshot_interactive()}
+            return {
+                "ok": True,
+                "elements": self.browser.snapshot_interactive(),
+                "mode": self.browser.mode,
+            }
         if name == "excel_new":
             return self.excel.new()
         if name == "excel_get_range":

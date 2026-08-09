@@ -24,10 +24,12 @@ perception:
   min_confidence_to_act: 0.75
 
 browser:
-  mode: attach  # attach (mode B) | controlled (mode A fallback)
+  mode: attach  # attach (mode B) | controlled (mode A)
   cdp_host: 127.0.0.1
   cdp_port: 9222
-  fallback_to_controlled: true
+  fallback_to_controlled: true  # attach 失败时自动降级到受控浏览器
+  controlled_channel: msedge  # msedge | chrome
+  controlled_user_data_dir: data/browser-controlled
 
 safety:
   confirm_coordinate_clicks: true

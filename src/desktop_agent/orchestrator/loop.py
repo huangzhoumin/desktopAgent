@@ -34,7 +34,9 @@ class Orchestrator:
     last_result: dict[str, Any] | None = None
     last_error: dict[str, Any] | None = None
     adapter_hints: str = (
-        "Prefer excel_* COM tools for Excel cells; browser_* for web pages; "
+        "Use launch_app to start missing apps. Prefer excel_* COM for Excel cells; "
+        "browser_* for web pages (attach or controlled fallback); "
+        "dialog_save_as for native Save As dialogs; "
         "UIA get_ui_summary/find_elements/click/type_text for Notepad and generic apps."
     )
 

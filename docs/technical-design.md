@@ -5,7 +5,7 @@
 > 目标场景：浏览器（Chrome / Edge）、办公软件（Microsoft Word/Excel + WPS + 记事本等）  
 > 平台：Windows 10 / 11  
 > 已确认：浏览器 MVP 用 Attach 日常浏览器（模式 B）；MS Office 与 WPS 均支持；MVP 交互为 CLI  
-> 实现进度：M2 已接入（Orchestrator 状态机 / tool-calling Planner / `ask_user`·`done` / CLI `run`）
+> 实现进度：M3 进行中（M2 Agent Loop 已接入；模式 A 降级 / 对话框适配 / T03–T08 评测与 dashboard 已落地）
 
 ---
 
@@ -1129,15 +1129,16 @@ desktop-agent doctor
 
 验收：T01–T05 在有 LLM 下可完成
 
-### M3 — 浏览器/Office 打磨（约 1–2 周）
+### M3 — 浏览器/Office 打磨（约 1–2 周）✅ 核心已落地
 
 交付：
 
-- Attach 日常浏览器稳定化（调试端口启动脚本、doctor、失败降级）
-- 对话框适配
-- 评测集与基础 dashboard（日志汇总即可）
+- Attach 日常浏览器稳定化（调试端口启动脚本、doctor、失败降级）✅
+- 对话框适配（`FileDialogHelper` / `dialog_save_as`）✅
+- 评测集与基础 dashboard（`eval-dashboard`）✅
+- `launch_app` + 浏览器模式 A（controlled）降级 ✅
 
-验收：T01–T08 达标；高危误执行 = 0
+验收：T01–T08 脚本可达；高危误执行 = 0（策略门闩保持）
 
 ### M4 — 体验与硬化（可选）
 
@@ -1182,14 +1183,15 @@ desktop-agent doctor
 
 ---
 
-## 19. 下一步（实现前清单）
+## 19. 下一步
 
 1. ~~评审关键决策（浏览器连接 / Office+WPS / CLI）~~ ✅  
-2. 冻结 Tool Schema v1（本节 §6）  
-3. 搭建仓库骨架与 `desktop-agent doctor`  
-4. 实现 Generic UIA + Notepad 闭环  
-5. 接入 Excel/Word COM、WPS Adapter，以及 Playwright Attach（模式 B）+ 受控降级（模式 A）  
-6. 再接 LLM Orchestrator  
+2. ~~冻结 Tool Schema v1 / doctor / UIA+Notepad / Office+WPS / Attach+模式A / LLM Orchestrator~~ ✅  
+3. 用 LLM e2e 稳定 T01–T05（本地 Ollama / 云端）  
+4. 对话框覆盖更多壳层场景（Office 提示框、浏览器下载栏 UIA）  
+5. M4：托盘驻留 / 暂停继续 / App Profile / VLM 兜底  
+
+当前 CLI 评测入口：`desktop-agent eval-t01` … `eval-t10`，汇总：`desktop-agent eval-dashboard --suite`。
 
 ---
 

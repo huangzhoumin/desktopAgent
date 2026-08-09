@@ -38,6 +38,8 @@ def main() -> int:
 
     url = html.as_uri()
     cfg = load_config()
+    cfg.browser.fallback_to_controlled = True
+    cfg.browser.controlled_channel = "msedge"
     trace = TraceStore(cfg.traces_dir, task_id=f"t02_{int(time.time())}")
     rt = ToolRuntime(cfg, trace=trace)
 
@@ -74,12 +76,25 @@ def main() -> int:
 
     ok = False
     try:
-        probe = step("browser_probe", lambda: rt.call("browser_probe"))
-        if not probe.get("ok"):
+        # Soft probe: ok=false is acceptable when mode A fallback is enabled.
+        t0 = time.perf_counter()
+        probe = rt.call("browser_probe")
+        probe_item = {
+            "step": "browser_probe",
+            "ok": True,
+            "ms": int((time.perf_counter() - t0) * 1000),
+            "result": probe,
+        }
+        steps.append(probe_item)
+        trace.log("eval_step", probe_item)
+        print(f"[OK] browser_probe ({probe_item['ms']}ms) attach={probe.get('ok')}")
+        if not probe.get("ok") and not cfg.browser.fallback_to_controlled:
             raise RuntimeError(
                 f"Browser CDP not reachable at {probe.get('endpoint')}. "
                 "Run scripts/start-browser-debug.ps1 first."
             )
+        if not probe.get("ok"):
+            print("  CDP attach unavailable; navigate will use controlled browser (mode A).")
 
         step("navigate", lambda: rt.call("browser_navigate", url=url))
         step("fill_name", lambda: rt.call("browser_fill", locator={"css": "#name"}, value=NAME))

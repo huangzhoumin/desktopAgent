@@ -22,21 +22,26 @@ py -m desktop_agent browser-probe
 
 详见 [docs/technical-design.md](docs/technical-design.md)。
 
-## 当前能力（M2）
+## 当前能力（M3）
 
 - CLI：`doctor` / `run` / `list-windows` / `sense` / `click` / `type-text` / `press-keys`
-- LLM Orchestrator 状态机 + tool-calling Planner（`ask_user` / `done`）
-- UIA 感知与基础动作；`wait_for`
+- LLM Orchestrator 状态机 + tool-calling Planner（`launch_app` / `ask_user` / `done`）
+- UIA 感知与基础动作；`wait_for`；通用 `dialog_save_as`
 - 应用白名单、高危确认门闩与本地 Trace
-- 浏览器 CDP Attach（模式 B）检测与连接
+- 浏览器 CDP Attach（模式 B）+ 失败自动降级受控浏览器（模式 A）
 - Excel / Word COM；WPS 表格/文字读写与保存
-- 无 LLM 闭环评测：
+- 无 LLM 闭环评测 + 汇总看板：
   - T01 Notepad：`py -m desktop_agent eval-t01`
-  - T02 Edge 填表（需先 `scripts/start-browser-debug.ps1`）：`py -m desktop_agent eval-t02`
+  - T02 Edge 填表（Attach 或模式 A 降级）：`py -m desktop_agent eval-t02`
+  - T03 Chrome：`py -m desktop_agent eval-t03 --force-controlled`
   - T04 Excel：`py -m desktop_agent eval-t04`
   - T05 Word：`py -m desktop_agent eval-t05`
+  - T06 Excel 打开/改值/另存为：`py -m desktop_agent eval-t06`
+  - T07 Edge 下载保存：`py -m desktop_agent eval-t07`
+  - T08 Excel→网页表单：`py -m desktop_agent eval-t08 --force-controlled`
   - T09 WPS 表格：`py -m desktop_agent eval-t09`
   - T10 WPS 文字：`py -m desktop_agent eval-t10`
+  - 汇总：`py -m desktop_agent eval-dashboard`（或 `--suite` 跑 T01–T08）
 
 ### LLM 配置
 
@@ -47,5 +52,5 @@ py -m desktop_agent browser-probe
 ```powershell
 # 确保 ollama serve 已运行
 py -m desktop_agent doctor
-py -m desktop_agent run "打开记事本，输入 hello，然后告诉我完成了"
+py -m desktop_agent run "打开记事本，输入 hello，然后告诉我完成了" --yes
 ```

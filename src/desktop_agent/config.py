@@ -18,6 +18,8 @@ class BrowserConfig:
     cdp_host: str = "127.0.0.1"
     cdp_port: int = 9222
     fallback_to_controlled: bool = True
+    controlled_channel: str = "msedge"  # msedge | chrome
+    controlled_user_data_dir: str = "data/browser-controlled"
 
 
 @dataclass
@@ -124,6 +126,10 @@ def load_config(
             cdp_host=str(browser_raw.get("cdp_host", "127.0.0.1")),
             cdp_port=int(browser_raw.get("cdp_port", 9222)),
             fallback_to_controlled=bool(browser_raw.get("fallback_to_controlled", True)),
+            controlled_channel=str(browser_raw.get("controlled_channel", "msedge")),
+            controlled_user_data_dir=str(
+                browser_raw.get("controlled_user_data_dir", "data/browser-controlled")
+            ),
         ),
         safety=SafetyConfig(
             confirm_coordinate_clicks=bool(safety_raw.get("confirm_coordinate_clicks", True)),

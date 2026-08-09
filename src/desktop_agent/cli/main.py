@@ -64,7 +64,7 @@ def doctor(
     # Whitelist
     rows.append(("Whitelist", "OK", f"{len(cfg.whitelist)} apps"))
 
-    # Browser CDP attach
+    # Browser CDP attach / controlled fallback
     status = rt.browser.probe()
     if status.ok:
         rows.append(
@@ -75,13 +75,22 @@ def doctor(
             )
         )
     else:
-        rows.append(
-            (
-                "Browser CDP (mode B)",
-                "WARN",
-                f"not reachable at {status.endpoint}. Run scripts/start-browser-debug.ps1",
+        detail = f"not reachable at {status.endpoint}."
+        if cfg.browser.fallback_to_controlled:
+            detail += (
+                f" fallback_to_controlled=ON (mode A / {cfg.browser.controlled_channel})"
             )
+        else:
+            detail += " Run scripts/start-browser-debug.ps1"
+        rows.append(("Browser CDP (mode B)", "WARN", detail))
+    rows.append(
+        (
+            "Browser mode A",
+            "OK" if cfg.browser.fallback_to_controlled or cfg.browser.mode == "controlled" else "OFF",
+            f"mode={cfg.browser.mode}; channel={cfg.browser.controlled_channel}; "
+            f"fallback={cfg.browser.fallback_to_controlled}",
         )
+    )
 
     # Excel / Word / WPS
     excel = rt.excel.probe()
@@ -288,6 +297,20 @@ def eval_t02(
     _run_eval_script("t02_edge.py", args)
 
 
+@app.command("eval-t03")
+def eval_t03(
+    html: Optional[Path] = typer.Option(None, "--html", help="Local HTML form path"),
+    force_controlled: bool = typer.Option(False, "--force-controlled"),
+) -> None:
+    """Run T03 Chrome form fill (attach or controlled mode A)."""
+    args: list[str] = []
+    if html:
+        args.extend(["--html", str(html)])
+    if force_controlled:
+        args.append("--force-controlled")
+    _run_eval_script("t03_chrome.py", args)
+
+
 @app.command("eval-t04")
 def eval_t04(
     out: Optional[Path] = typer.Option(None, "--out", help="Output xlsx path"),
@@ -316,6 +339,60 @@ def eval_t05(
     _run_eval_script("t05_word.py", args)
 
 
+@app.command("eval-t06")
+def eval_t06(
+    src: Optional[Path] = typer.Option(None, "--src", help="Seed workbook path"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Save-as destination"),
+    keep_open: bool = typer.Option(False, "--keep-open"),
+) -> None:
+    """Run T06 Excel open/modify/save-as verification (no LLM)."""
+    args: list[str] = []
+    if src:
+        args.extend(["--src", str(src)])
+    if out:
+        args.extend(["--out", str(out)])
+    if keep_open:
+        args.append("--keep-open")
+    _run_eval_script("t06_excel_save_as.py", args)
+
+
+@app.command("eval-t07")
+def eval_t07(
+    html: Optional[Path] = typer.Option(None, "--html"),
+    out: Optional[Path] = typer.Option(None, "--out"),
+    force_controlled: bool = typer.Option(False, "--force-controlled"),
+) -> None:
+    """Run T07 Edge download + save filename verification (no LLM)."""
+    args: list[str] = []
+    if html:
+        args.extend(["--html", str(html)])
+    if out:
+        args.extend(["--out", str(out)])
+    if force_controlled:
+        args.append("--force-controlled")
+    _run_eval_script("t07_edge_download.py", args)
+
+
+@app.command("eval-t08")
+def eval_t08(
+    html: Optional[Path] = typer.Option(None, "--html"),
+    workbook: Optional[Path] = typer.Option(None, "--workbook"),
+    keep_open: bool = typer.Option(False, "--keep-open"),
+    force_controlled: bool = typer.Option(False, "--force-controlled"),
+) -> None:
+    """Run T08 Excel value -> web form verification (no LLM)."""
+    args: list[str] = []
+    if html:
+        args.extend(["--html", str(html)])
+    if workbook:
+        args.extend(["--workbook", str(workbook)])
+    if keep_open:
+        args.append("--keep-open")
+    if force_controlled:
+        args.append("--force-controlled")
+    _run_eval_script("t08_excel_to_form.py", args)
+
+
 @app.command("eval-t09")
 def eval_t09(
     out: Optional[Path] = typer.Option(None, "--out", help="Output xlsx path"),
@@ -342,6 +419,30 @@ def eval_t10(
     if keep_open:
         args.append("--keep-open")
     _run_eval_script("t10_wps_writer.py", args)
+
+
+@app.command("eval-dashboard")
+def eval_dashboard(
+    suite: bool = typer.Option(False, "--suite", help="Run T01-T08 then aggregate"),
+    run: Optional[list[str]] = typer.Option(None, "--run", help="Task ids to run, e.g. T01"),
+    force_controlled: bool = typer.Option(False, "--force-controlled"),
+    out: Optional[Path] = typer.Option(None, "--out"),
+    md: Optional[Path] = typer.Option(None, "--md"),
+) -> None:
+    """Aggregate eval reports; optionally run a suite first."""
+    args: list[str] = []
+    if suite:
+        args.append("--suite")
+    if run:
+        args.append("--run")
+        args.extend(run)
+    if force_controlled:
+        args.append("--force-controlled")
+    if out:
+        args.extend(["--out", str(out)])
+    if md:
+        args.extend(["--md", str(md)])
+    _run_eval_script("dashboard.py", args)
 
 
 @app.command()
@@ -374,6 +475,18 @@ def run(
         rprint(Panel(question, title="ask_user"))
         if options:
             rprint("Options: " + ", ".join(options))
+        if yes:
+            # Non-interactive: pick an affirmative option when available.
+            if options:
+                for opt in options:
+                    low = opt.lower()
+                    if low in {"y", "yes", "是", "ok", "true"} or "启动" in opt or "launch" in low:
+                        rprint(f"[yellow]auto-answer[/]: {opt}")
+                        return opt
+                rprint(f"[yellow]auto-answer[/]: {options[0]}")
+                return options[0]
+            rprint("[yellow]auto-answer[/]: yes")
+            return "yes"
         try:
             return input("> ").strip()
         except EOFError:

@@ -12,6 +12,7 @@ RUNTIME_TOOLS = frozenset(
     {
         "list_windows",
         "focus_window",
+        "launch_app",
         "get_ui_summary",
         "find_elements",
         "screenshot",
@@ -19,10 +20,12 @@ RUNTIME_TOOLS = frozenset(
         "type_text",
         "press_keys",
         "wait_for",
+        "dialog_save_as",
         "browser_probe",
         "browser_navigate",
         "browser_fill",
         "browser_click",
+        "browser_download",
         "browser_snapshot",
         "excel_new",
         "excel_open",
@@ -76,6 +79,25 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "type": "object",
             "required": ["window_id"],
             "properties": {"window_id": {"type": "string"}},
+        },
+    ),
+    _tool(
+        "launch_app",
+        "Launch a whitelisted app by alias (notepad, excel, word, edge, chrome). Prefer this over asking the user.",
+        {
+            "type": "object",
+            "required": ["app"],
+            "properties": {
+                "app": {
+                    "type": "string",
+                    "description": "App alias: notepad, excel, word, edge, chrome",
+                },
+                "args": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional process arguments",
+                },
+            },
         },
     ),
     _tool(
@@ -258,6 +280,39 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "browser_snapshot",
         "Snapshot interactive DOM elements from the attached browser page.",
         {"type": "object", "properties": {}},
+    ),
+    _tool(
+        "browser_download",
+        "Click a download trigger and save the downloaded file to a local path.",
+        {
+            "type": "object",
+            "required": ["locator", "path"],
+            "properties": {
+                "locator": {
+                    "type": "object",
+                    "properties": {
+                        "css": {"type": "string"},
+                        "role": {"type": "string"},
+                        "name": {"type": "string"},
+                        "label": {"type": "string"},
+                    },
+                },
+                "path": {"type": "string", "description": "Destination file path"},
+                "timeout_ms": {"type": "integer", "default": 15000},
+            },
+        },
+    ),
+    _tool(
+        "dialog_save_as",
+        "Fill a visible native Save As dialog with a path and confirm Save.",
+        {
+            "type": "object",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string"},
+                "timeout_s": {"type": "number", "default": 5.0},
+            },
+        },
     ),
     _tool(
         "excel_new",
