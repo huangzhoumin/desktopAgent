@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +23,34 @@ class BrowserStatus:
     pages: list[dict[str, Any]] | None = None
     error: str | None = None
     mode: str = "attach"
+    auto_started: bool = False
+
+
+def isolated_chrome_profile_dir() -> Path:
+    """Same profile used by scripts/start-chrome-debug-isolated.bat."""
+    local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return Path(local) / "DesktopAgent" / "browser-debug-profile" / "chrome"
+
+
+def find_chrome_executable() -> Path | None:
+    env = os.environ
+    candidates = [
+        Path(env.get("ProgramFiles", r"C:\Program Files"))
+        / "Google"
+        / "Chrome"
+        / "Application"
+        / "chrome.exe",
+        Path(env.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+        / "Google"
+        / "Chrome"
+        / "Application"
+        / "chrome.exe",
+        Path(env.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+    ]
+    for path in candidates:
+        if path and path.is_file():
+            return path
+    return None
 
 
 class BrowserAdapter:
@@ -41,7 +72,13 @@ class BrowserAdapter:
     def mode(self) -> str | None:
         return self._mode
 
-    def probe(self) -> BrowserStatus:
+    def probe(self, *, auto_start_isolated: bool = False) -> BrowserStatus:
+        status = self._probe_once()
+        if status.ok or not auto_start_isolated:
+            return status
+        return self.launch_isolated_debug()
+
+    def _probe_once(self) -> BrowserStatus:
         endpoint = self.endpoint
         try:
             with httpx.Client(timeout=2.0) as client:
@@ -77,6 +114,75 @@ class BrowserAdapter:
                 error=f"{detail}. {hint}",
                 mode="attach",
             )
+
+    def launch_isolated_debug(self, wait_s: float = 20.0) -> BrowserStatus:
+        """Start Chrome with the isolated debug profile (same as the .bat helper)."""
+        status = self._probe_once()
+        if status.ok:
+            return status
+
+        chrome = find_chrome_executable()
+        if chrome is None:
+            return BrowserStatus(
+                ok=False,
+                endpoint=self.endpoint,
+                error="Cannot find chrome.exe to auto-start isolated debug Chrome.",
+                mode="attach",
+                auto_started=False,
+            )
+
+        profile = isolated_chrome_profile_dir()
+        profile.mkdir(parents=True, exist_ok=True)
+        port = int(self.config.browser.cdp_port)
+        args = [
+            str(chrome),
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={profile}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--new-window",
+            "about:blank",
+        ]
+        popen_kwargs: dict[str, Any] = {
+            "args": args,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "stdin": subprocess.DEVNULL,
+        }
+        if sys.platform == "win32":
+            # Detach so probe CLI exit does not tear down Chrome.
+            popen_kwargs["creationflags"] = (
+                subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            )
+            popen_kwargs["close_fds"] = True
+
+        try:
+            subprocess.Popen(**popen_kwargs)
+        except Exception as e:
+            return BrowserStatus(
+                ok=False,
+                endpoint=self.endpoint,
+                error=f"Failed to launch isolated debug Chrome: {e}",
+                mode="attach",
+                auto_started=False,
+            )
+
+        deadline = time.time() + wait_s
+        last = status
+        while time.time() < deadline:
+            last = self._probe_once()
+            if last.ok:
+                last.auto_started = True
+                last.mode = "attach"
+                return last
+            time.sleep(0.5)
+
+        last.auto_started = True
+        last.error = (
+            f"{last.error or 'CDP still unreachable'} "
+            f"(auto-started {chrome} with profile {profile})"
+        )
+        return last
 
     def connect(self) -> BrowserStatus:
         prefer = (self.config.browser.mode or "attach").lower()

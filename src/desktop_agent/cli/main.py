@@ -224,10 +224,17 @@ def press_keys(
 
 
 @app.command("browser-probe")
-def browser_probe(config: Optional[Path] = typer.Option(None, "--config")) -> None:
-    """Probe CDP attach endpoint (mode B)."""
+def browser_probe(
+    config: Optional[Path] = typer.Option(None, "--config"),
+    no_auto_start: bool = typer.Option(
+        False,
+        "--no-auto-start",
+        help="Do not auto-launch scripts/start-chrome-debug-isolated Chrome when CDP is down.",
+    ),
+) -> None:
+    """Probe CDP attach endpoint (mode B). Auto-starts isolated debug Chrome if needed."""
     rt = _runtime(config)
-    _print_json(rt.call("browser_probe"))
+    _print_json(rt.call("browser_probe", auto_start_isolated=not no_auto_start))
 
 
 @app.command("browser-open")
