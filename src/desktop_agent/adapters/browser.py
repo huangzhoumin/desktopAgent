@@ -64,7 +64,19 @@ class BrowserAdapter:
                 mode="attach",
             )
         except Exception as e:
-            return BrowserStatus(ok=False, endpoint=endpoint, error=str(e), mode="attach")
+            detail = str(e) or e.__class__.__name__
+            # Chrome 136+ ignores --remote-debugging-port on the default profile.
+            hint = (
+                "Nothing listening on CDP (Chrome not started with debug port, "
+                "or flags ignored). Use scripts/start-chrome-debug-isolated.bat "
+                "(requires --user-data-dir; Chrome 136+)."
+            )
+            return BrowserStatus(
+                ok=False,
+                endpoint=endpoint,
+                error=f"{detail}. {hint}",
+                mode="attach",
+            )
 
     def connect(self) -> BrowserStatus:
         prefer = (self.config.browser.mode or "attach").lower()
